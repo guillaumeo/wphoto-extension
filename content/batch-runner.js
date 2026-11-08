@@ -16,12 +16,37 @@
     "skipped_video",
     "skipped_existing_description",
     "skipped_cloud_error",
-    "skipped_no_metadata"
+    "skipped_no_metadata",
+    "skipped_unowned",
+    "skipped_not_found"
   ]);
 
   let isEngineNavigating = false;
   let isBatchRunningInMemory = false;
+  let activeRunGeneration = 0;
+  let isBatchAborted = false;
   const stateListeners = new Set();
+
+  function abortInFlightWork() {
+    isBatchAborted = true;
+    isBatchRunningInMemory = false;
+    activeRunGeneration++;
+    try {
+      if (typeof window !== "undefined" && window.__wphotoActiveAbortController) {
+        window.__wphotoActiveAbortController.abort();
+        window.__wphotoActiveAbortController = null;
+      }
+    } catch (e) {}
+  }
+
+  function resetAbortStateForNewRun() {
+    isBatchAborted = false;
+    activeRunGeneration++;
+  }
+
+  if (typeof window !== "undefined") {
+    window.__wphotoIsBatchAborted = () => isBatchAborted;
+  }
 
   function notifyStateListeners(batch) {
     for (const fn of stateListeners) {
@@ -53,6 +78,7 @@
   }
 
   async function clearActiveBatch() {
+    abortInFlightWork();
     try {
       await chrome.storage.local.remove("activeBatch");
       isBatchRunningInMemory = false;
@@ -95,6 +121,7 @@
   }
 
   async function processCurrentPhotoStep(batch, { skipSettle = false } = {}) {
+    const myGen = activeRunGeneration;
     const dom = window.WPhotoDomCaption;
     const ai = window.WPhotoAiEngine;
     const idx = getProcessedCount(batch);
@@ -117,18 +144,30 @@
 
     if (!skipSettle) {
       await dom.sleep(POST_NAV_SETTLE_MS);
-      const latest = await loadActiveBatch();
-      if (!latest || latest.completedAt !== null || latest.lastReason !== null) {
-        return;
-      }
-      batch = latest;
     }
 
-    const attachRes = await dom.sendToBackground({ type: "BATCH_ATTACH" });
+    if (myGen !== activeRunGeneration || isBatchAborted) return;
+    const preAttachBatch = await loadActiveBatch();
+    if (!preAttachBatch || preAttachBatch.completedAt !== null || preAttachBatch.lastReason !== null) {
+      return;
+    }
+    batch = preAttachBatch;
+
+    const attachRes = await dom.sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
+    if (myGen !== activeRunGeneration || isBatchAborted) return;
     if (!attachRes.ok) {
-      batch.failedIds = [...batch.failedIds, photoId];
-      batch.completedAt = Date.now();
-      batch.lastReason = "dom_abort";
+      const latestAfterAttach = await loadActiveBatch();
+      if (!latestAfterAttach || latestAfterAttach.completedAt !== null || latestAfterAttach.lastReason !== null) {
+        return;
+      }
+      if (attachRes.error === "batch_not_active" || attachRes.error === "detached_by_user") {
+        batch.completedAt = Date.now();
+        batch.lastReason = "cancelled";
+      } else {
+        batch.failedIds = [...batch.failedIds, photoId];
+        batch.completedAt = Date.now();
+        batch.lastReason = "dom_abort";
+      }
       await saveActiveBatch(batch);
       await dom.sendToBackground({ type: "BATCH_DETACH" });
       return;
@@ -144,33 +183,41 @@
       new Promise((resolve) => setTimeout(() => resolve(timeoutToken), PHOTO_WALL_CLOCK_TIMEOUT_MS))
     ]);
 
+    if (myGen !== activeRunGeneration || isBatchAborted) {
+      return;
+    }
+
+    const latestBatch = await loadActiveBatch();
+    if (!latestBatch || latestBatch.lastReason !== null || latestBatch.completedAt !== null) {
+      return;
+    }
+
     const result =
       outcome === timeoutToken
         ? { success: false, error: "photo_timeout", timing: {} }
         : outcome;
+
+    if (result.error === "batch_aborted") {
+      return;
+    }
 
     // 1x transient error retry via page reload
     if (
       !result.success &&
       result.error &&
       TRANSIENT_RETRY_ERRORS.has(result.error) &&
-      (batch.retryPhotoIds[photoId] ?? 0) < 1
+      (latestBatch.retryPhotoIds[photoId] ?? 0) < 1
     ) {
       const updated = {
-        ...batch,
-        retriedTotal: (batch.retriedTotal ?? 0) + 1,
+        ...latestBatch,
+        retriedTotal: (latestBatch.retriedTotal ?? 0) + 1,
         retryPhotoIds: {
-          ...batch.retryPhotoIds,
-          [photoId]: (batch.retryPhotoIds[photoId] ?? 0) + 1
+          ...latestBatch.retryPhotoIds,
+          [photoId]: (latestBatch.retryPhotoIds[photoId] ?? 0) + 1
         }
       };
       await saveActiveBatch(updated);
       navigateToPhoto(photoId);
-      return;
-    }
-
-    const latestBatch = await loadActiveBatch();
-    if (!latestBatch || latestBatch.lastReason !== null || latestBatch.completedAt !== null) {
       return;
     }
 
@@ -225,11 +272,16 @@
       return { started: false, error: "no_photo_ids" };
     }
 
+    resetAbortStateForNewRun();
+
     if (options.verbose) {
       await window.WPhotoAiEngine.clearAiDescLog();
     }
 
-    const attachRes = await window.WPhotoDomCaption.sendToBackground({ type: "BATCH_ATTACH" });
+    const attachRes = await window.WPhotoDomCaption.sendToBackground({
+      type: "BATCH_ATTACH",
+      explicitStart: true
+    });
     const batch = {
       action: "aiDescription",
       options: {
@@ -289,10 +341,12 @@
     }
 
     if (batch.photoIds[idx] !== currentViewerId) return;
+    isBatchAborted = false;
     await processCurrentPhotoStep(batch);
   }
 
   async function pauseBatch() {
+    abortInFlightWork();
     const batch = await loadActiveBatch();
     if (batch && batch.completedAt === null) {
       batch.lastReason = "paused";
@@ -303,6 +357,7 @@
   }
 
   async function cancelBatch() {
+    abortInFlightWork();
     const batch = await loadActiveBatch();
     if (batch && batch.completedAt === null) {
       batch.lastReason = "cancelled";
@@ -326,10 +381,20 @@
       return;
     }
 
+    resetAbortStateForNewRun();
     batch.lastReason = null;
     batch.completedAt = null;
     await saveActiveBatch(batch);
-    await window.WPhotoDomCaption.sendToBackground({ type: "BATCH_ATTACH" });
+    const attachRes = await window.WPhotoDomCaption.sendToBackground({
+      type: "BATCH_ATTACH",
+      explicitStart: true
+    });
+    if (!attachRes.ok) {
+      batch.lastReason = "dom_abort";
+      batch.completedAt = Date.now();
+      await saveActiveBatch(batch);
+      return;
+    }
 
     const targetId = batch.photoIds[idx];
     const currentViewerId = window.WPhotoSelection.parsePhotoIdFromPath();
@@ -344,12 +409,15 @@
   try {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === "BATCH_UNEXPECTED_DETACH") {
+        abortInFlightWork();
         (async () => {
           const batch = await loadActiveBatch();
-          if (batch && batch.completedAt === null && batch.lastReason === null) {
-            batch.lastReason = "paused";
-            batch.completedAt = Date.now();
+          if (batch && (batch.completedAt === null || batch.lastReason === null)) {
+            batch.lastReason = "cancelled";
+            batch.completedAt = batch.completedAt || Date.now();
             await saveActiveBatch(batch);
+          } else if (batch) {
+            notifyStateListeners(batch);
           }
         })();
       }
@@ -357,7 +425,11 @@
 
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes.activeBatch) {
-        notifyStateListeners(changes.activeBatch.newValue || null);
+        const nextVal = changes.activeBatch.newValue || null;
+        if (!nextVal || nextVal.completedAt !== null || nextVal.lastReason !== null) {
+          abortInFlightWork();
+        }
+        notifyStateListeners(nextVal);
       }
     });
 

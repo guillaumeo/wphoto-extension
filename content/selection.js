@@ -66,14 +66,96 @@
     return false;
   }
 
+  let cachedViewerAccountName = null;
+
+  function resolveViewerAccountName() {
+    if (cachedViewerAccountName !== null) return cachedViewerAccountName;
+    if (typeof document === "undefined" || typeof document.querySelector !== "function") return null;
+    const accBtn = document.querySelector('a[role="button"][aria-label*="Google Account:"]');
+    if (accBtn) {
+      const label = accBtn.getAttribute?.("aria-label") || "";
+      const m = label.match(/Google Account:\s*([^(\n]+)/);
+      const name = m?.[1]?.trim();
+      if (name) {
+        cachedViewerAccountName = name;
+        return name;
+      }
+    }
+    if (typeof document.querySelectorAll === "function") {
+      for (const el of Array.from(document.querySelectorAll('a[role="button"][aria-label]'))) {
+        const label = el.getAttribute?.("aria-label") || "";
+        if (!/\([^()\s]+@[^()\s]+\)/.test(label)) continue;
+        const m = label.match(/:\s*([^(\n]+?)\s*(?:\n|\()/);
+        const name = m?.[1]?.trim();
+        if (name) {
+          cachedViewerAccountName = name;
+          return name;
+        }
+      }
+    }
+    return null;
+  }
+
+  function resolveTileOwnerName(checkboxOrTile) {
+    const link = findTileLink(checkboxOrTile);
+    const container = link?.parentElement;
+    if (!container || typeof container.querySelectorAll !== "function") return null;
+    for (const node of Array.from(container.querySelectorAll("div, span"))) {
+      if ((node.children && node.children.length > 0) || link.contains?.(node)) continue;
+      const text = (node.textContent || "").trim();
+      if (text.length >= 2 && text.length <= 50 && /\p{L}/u.test(text) && !/\p{Nd}/u.test(text)) {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  function isOwnedByViewerInScripts(mediaId) {
+    if (!mediaId || typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+      return null;
+    }
+    const ds7Marker = "AF_initDataCallback({key: 'ds:7'";
+    for (const script of Array.from(document.querySelectorAll("script"))) {
+      const text = script.textContent || "";
+      const ds7Idx = text.indexOf(ds7Marker);
+      if (ds7Idx < 0) continue;
+      const pos = text.indexOf(`"${mediaId}"`, ds7Idx);
+      if (pos < 0) continue;
+      const slice = text.slice(pos, pos + 2500);
+      return /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
+    }
+    return null;
+  }
+
+  function isUnownedSharedItem(mediaId, checkboxOrTile) {
+    const scriptOwned = isOwnedByViewerInScripts(mediaId);
+    if (scriptOwned === false) return true;
+    if (scriptOwned === true) return false;
+    if (checkboxOrTile) {
+      const tileOwner = resolveTileOwnerName(checkboxOrTile);
+      const viewerName = resolveViewerAccountName();
+      if (tileOwner && viewerName && tileOwner !== viewerName) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function classifyAriaLabel(label, checkboxEl) {
     if (checkboxEl && tileHasDurationBadge(checkboxEl)) {
       return "skipped_video";
     }
-    if (!label) {
-      return checkboxEl && findTileLink(checkboxEl) ? "eligible" : "skipped_unsupported";
+    const linkLabel = checkboxEl ? findTileLink(checkboxEl)?.getAttribute?.("aria-label") || "" : "";
+    const combinedLabel = [label || "", linkLabel].filter(Boolean).join(" - ");
+    if (!combinedLabel) {
+      if (checkboxEl && findTileLink(checkboxEl)) {
+        const mediaId = resolveMediaId(checkboxEl);
+        return isUnownedSharedItem(mediaId, checkboxEl) ? "skipped_unowned" : "eligible";
+      }
+      return "skipped_unsupported";
     }
-    const hasPrefix = (prefix) => label.startsWith(prefix) || label.includes(` - ${prefix}`);
+    const hasPrefix = (prefix) =>
+      combinedLabel.startsWith(prefix) || combinedLabel.includes(` - ${prefix}`);
     if (
       hasPrefix("Video - ") ||
       hasPrefix("Vidéo - ") ||
@@ -83,7 +165,11 @@
     ) {
       return "skipped_video";
     }
-    if (/ - (Shared by|Partagé par|Compartido por) /i.test(label)) {
+    if (/ - (Shared by|Partagé par|Compartido por) /i.test(combinedLabel)) {
+      return "skipped_unowned";
+    }
+    const mediaId = checkboxEl ? resolveMediaId(checkboxEl) : null;
+    if (isUnownedSharedItem(mediaId, checkboxEl)) {
       return "skipped_unowned";
     }
     if (
@@ -91,7 +177,7 @@
       hasPrefix("Foto - ") ||
       hasPrefix("Burst photo - ") ||
       hasPrefix("Raw photo - ") ||
-      / - (Photo stack|Top shot|Pile de photos|Mejor toma)\b/i.test(label)
+      / - (Photo stack|Top shot|Pile de photos|Mejor toma)\b/i.test(combinedLabel)
     ) {
       return "eligible";
     }
@@ -282,7 +368,7 @@
         if (typeof mediaKey !== "string") continue;
         const meta = Array.isArray(row) ? row[row.length - 1] : null;
         const durationMs = meta?.[76647426]?.[0] ?? null;
-        if (durationMs !== null) {
+        if (durationMs !== null || isOwnedByViewerInScripts(mediaKey) === false) {
           skippedIds.push(mediaKey);
         } else {
           ids.push(mediaKey);

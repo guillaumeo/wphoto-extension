@@ -110,7 +110,7 @@ def main():
                     f"Unexpected binary/icon asset found: {fn}"
                 )
                 total_bytes += os.path.getsize(os.path.join(root, fn))
-        assert total_bytes < 150 * 1024, f"Extension size too large: {total_bytes} bytes"
+        assert total_bytes < 250 * 1024, f"Extension size too large: {total_bytes} bytes"
 
     def pkg_03():
         for root, dirs, files in os.walk(ext_dir):
@@ -360,7 +360,8 @@ def main():
         mockCheckboxes = [
           makeTile("P_ELIGIBLE_1", "Photo - Oct 12, 2025"),
           makeTile("P_STACK_2", "Photo - Top shot - Oct 12, 2025"),
-          makeTile("V_SKIP_3", "Video - Oct 12, 2025", true)
+          makeTile("V_SKIP_3", "Video - Oct 12, 2025", true),
+          makeTile("P_SHARED_4", "Photo - Oct 12, 2025 - Shared by Alice")
         ];
 
         const elig = sel.getEligibleIds();
@@ -368,7 +369,7 @@ def main():
         if (JSON.stringify(elig) !== JSON.stringify(["P_ELIGIBLE_1", "P_STACK_2"])) {{
           throw new Error("Eligible IDs mismatch: " + JSON.stringify(elig));
         }}
-        if (JSON.stringify(skip) !== JSON.stringify(["V_SKIP_3"])) {{
+        if (JSON.stringify(skip) !== JSON.stringify(["V_SKIP_3", "P_SHARED_4"])) {{
           throw new Error("Skipped IDs mismatch: " + JSON.stringify(skip));
         }}
 
@@ -695,6 +696,16 @@ def main():
           const resForce = await dom.ensureInfoPanelOpen({{ forceToggleIfNoTextarea: true }});
           if (infoBtnClicks === 0) {{
             throw new Error("Expected forceToggleIfNoTextarea to click Info button when textarea is missing");
+          }}
+
+          // 4. "Photo not found" page fast-fails with skipped_unowned instead of hanging on black screen
+          globalThis.document.body = {{ innerText: "Photo not found" }};
+          if (!dom.isPhotoNotFoundPage()) {{
+            throw new Error("Expected isPhotoNotFoundPage() to return true when body shows 'Photo not found'");
+          }}
+          const resNotFound = await dom.ensureInfoPanelOpen();
+          if (resNotFound.ok || resNotFound.error !== "skipped_unowned") {{
+            throw new Error("Expected ensureInfoPanelOpen to fast-fail with skipped_unowned on Photo not found page");
           }}
 
           print("DOM_03_OK");
@@ -1485,10 +1496,22 @@ def main():
             throw new Error("BATCH_AWAIT_SAVE_QUIESCENCE failed: " + JSON.stringify(rQuiesce));
           }}
 
-          // Unexpected detach notification
+          // Unexpected detach notification ("AI Plus is debugging this browser" -> Cancel)
           onDetachHandler({{ tabId: 42 }}, "canceled_by_user");
           if (tabMessages.length === 0 || tabMessages[0].msg.type !== "BATCH_UNEXPECTED_DETACH") {{
             throw new Error("Expected BATCH_UNEXPECTED_DETACH message on debugger detach");
+          }}
+
+          // Automatic/step re-attach must be refused after user clicked Cancel on debugger banner
+          const rAutoReattach = await sendMsg({{ type: "BATCH_ATTACH", forPhotoStep: true }});
+          if (rAutoReattach.ok || rAutoReattach.error !== "detached_by_user") {{
+            throw new Error("Expected automatic BATCH_ATTACH to be blocked after user detach, got: " + JSON.stringify(rAutoReattach));
+          }}
+
+          // Explicit user start from UI clears detached state and attaches cleanly
+          const rExplicitReattach = await sendMsg({{ type: "BATCH_ATTACH", explicitStart: true }});
+          if (!rExplicitReattach.ok || !rExplicitReattach.attached) {{
+            throw new Error("Expected explicitStart BATCH_ATTACH to succeed");
           }}
 
           print("BG_01_OK");

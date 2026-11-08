@@ -13,6 +13,14 @@
   const METADATA_BUDGET_MS = 2000;
   const METADATA_STABLE_MS = 200;
 
+  function isBatchAborted() {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.__wphotoIsBatchAborted === "function" &&
+      window.__wphotoIsBatchAborted()
+    );
+  }
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -20,6 +28,7 @@
   async function waitFor(predicate, timeoutMs, pollMs = 80) {
     const start = performance.now();
     while (performance.now() - start < timeoutMs) {
+      if (isBatchAborted()) return null;
       try {
         const res = predicate();
         if (res) return res;
@@ -77,6 +86,46 @@
       if (r && (r.width === 0 || r.height === 0)) return false;
     }
     return true;
+  }
+
+  const PHOTO_NOT_FOUND_REGEX =
+    /\b(photo not found|can't find photo|cannot find photo|photo introuvable|impossible de trouver la photo|no se ha encontrado la foto|no se encontr[óo] la foto)\b/i;
+  const SHARED_BY_REGEX = /\b(Shared by|Partagé par|Compartido por)\b/i;
+
+  function isPhotoNotFoundPage() {
+    if (typeof document === "undefined") return false;
+    const bodyText = document.body?.innerText || document.body?.textContent || "";
+    if (bodyText && PHOTO_NOT_FOUND_REGEX.test(bodyText)) return true;
+    if (typeof document.querySelectorAll === "function") {
+      for (const el of Array.from(document.querySelectorAll("div, span, p, h1, h2"))) {
+        if (el.children && el.children.length > 0) continue;
+        const txt = (el.textContent || "").trim();
+        if (txt && txt.length < 160 && PHOTO_NOT_FOUND_REGEX.test(txt)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  async function isInfoPanelReadOnlyUnowned() {
+    if (typeof document === "undefined") return false;
+    if (findVisibleDescriptionTextarea()) return false;
+    if (typeof document.querySelectorAll === "function") {
+      for (const el of Array.from(document.querySelectorAll("dl, div, span"))) {
+        if (el.children && el.children.length > 0 && el.tagName !== "DL") continue;
+        const txt = (el.textContent || "").trim();
+        if (txt && txt.length < 200 && SHARED_BY_REGEX.test(txt)) {
+          return true;
+        }
+      }
+      const dls = document.querySelectorAll("dl");
+      if (dls && dls.length > 0 && isInfoPanelOpen()) {
+        const ta = await waitFor(findVisibleDescriptionTextarea, 600, 80);
+        if (!ta) return true;
+      }
+    }
+    return false;
   }
 
   function isInfoPanelOpen() {
@@ -181,6 +230,14 @@
     };
 
     logPanel("ensureInfoPanelOpen started");
+    if (isPhotoNotFoundPage()) {
+      logPanel("ABORT: Photo not found page detected");
+      return {
+        ok: false,
+        error: "skipped_unowned",
+        detail: "photo not found (not in your library)"
+      };
+    }
     if (isInfoPanelOpen()) {
       if (!forceToggleIfNoTextarea || findVisibleDescriptionTextarea()) {
         await sleep(150);
@@ -255,10 +312,13 @@
     const rect = btn.getBoundingClientRect();
     const cx = Math.round(rect.left + rect.width / 2);
     const cy = Math.round(rect.top + rect.height / 2);
+    if (isBatchAborted()) {
+      return { ok: false, error: "batch_aborted", detail: "Batch cancelled" };
+    }
     logPanel(`attempting CDP click at (${cx}, ${cy})`);
     let clickRes = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
-    if (!clickRes.ok) {
-      const attachRes = await sendToBackground({ type: "BATCH_ATTACH" });
+    if (!clickRes.ok && !isBatchAborted()) {
+      const attachRes = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
       if (attachRes.ok) {
         clickRes = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
       }
@@ -463,18 +523,27 @@
       return finish(true);
     }
 
+    if (isBatchAborted()) {
+      return finish(false, "batch_aborted", "cancelled by user");
+    }
+
     const focusStart = performance.now();
     const rect = textarea.getBoundingClientRect();
     const cx = Math.round(rect.left + rect.width / 2);
     const cy = Math.round(rect.top + rect.height / 2);
 
     let clickRes = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
-    if (!clickRes.ok) {
+    if (!clickRes.ok && !isBatchAborted()) {
       await sleep(200);
-      const attach = await sendToBackground({ type: "BATCH_ATTACH" });
-      if (attach.ok) {
-        clickRes = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
+      if (!isBatchAborted()) {
+        const attach = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
+        if (attach.ok) {
+          clickRes = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
+        }
       }
+    }
+    if (isBatchAborted()) {
+      return finish(false, "batch_aborted", "cancelled by user");
     }
     if (!clickRes.ok) {
       return finish(false, "click_dispatch_failed", clickRes.error);
@@ -482,15 +551,18 @@
 
     await sleep(60);
     let focused = !!(await waitFor(() => document.activeElement === textarea || null, FOCUS_LAND_TIMEOUT_MS));
-    for (let attempt = 0; !focused && attempt < FOCUS_RECLICK_ATTEMPTS; attempt++) {
+    for (let attempt = 0; !focused && attempt < FOCUS_RECLICK_ATTEMPTS && !isBatchAborted(); attempt++) {
       let retryClick = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
-      if (!retryClick.ok) {
-        const attach = await sendToBackground({ type: "BATCH_ATTACH" });
+      if (!retryClick.ok && !isBatchAborted()) {
+        const attach = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
         if (attach.ok) {
           retryClick = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
         }
       }
       focused = !!(await waitFor(() => document.activeElement === textarea || null, FOCUS_LAND_TIMEOUT_MS));
+    }
+    if (isBatchAborted()) {
+      return finish(false, "batch_aborted", "cancelled by user");
     }
     if (!focused) {
       return finish(false, "caption_focus_failed");
@@ -504,18 +576,23 @@
         windowsVirtualKeyCode: 65,
         commands: ["SelectAll"]
       });
-      if (!selAll.ok) {
+      if (!selAll.ok && !isBatchAborted()) {
         await sleep(200);
-        const attach = await sendToBackground({ type: "BATCH_ATTACH" });
-        if (attach.ok) {
-          selAll = await sendToBackground({
-            type: "BATCH_DISPATCH_KEY",
-            key: "a",
-            code: "KeyA",
-            windowsVirtualKeyCode: 65,
-            commands: ["SelectAll"]
-          });
+        if (!isBatchAborted()) {
+          const attach = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
+          if (attach.ok) {
+            selAll = await sendToBackground({
+              type: "BATCH_DISPATCH_KEY",
+              key: "a",
+              code: "KeyA",
+              windowsVirtualKeyCode: 65,
+              commands: ["SelectAll"]
+            });
+          }
         }
+      }
+      if (isBatchAborted()) {
+        return finish(false, "batch_aborted", "cancelled by user");
       }
       if (!selAll.ok) {
         return finish(false, "key_dispatch_failed", selAll.error || "select_all_failed");
@@ -524,12 +601,17 @@
     }
 
     let insertRes = await sendToBackground({ type: "BATCH_INSERT_TEXT", text: targetText });
-    if (!insertRes.ok) {
+    if (!insertRes.ok && !isBatchAborted()) {
       await sleep(200);
-      const attach = await sendToBackground({ type: "BATCH_ATTACH" });
-      if (attach.ok) {
-        insertRes = await sendToBackground({ type: "BATCH_INSERT_TEXT", text: targetText });
+      if (!isBatchAborted()) {
+        const attach = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
+        if (attach.ok) {
+          insertRes = await sendToBackground({ type: "BATCH_INSERT_TEXT", text: targetText });
+        }
       }
+    }
+    if (isBatchAborted()) {
+      return finish(false, "batch_aborted", "cancelled by user");
     }
     if (!insertRes.ok) {
       return finish(false, "insert_text_failed", insertRes.error);
@@ -543,17 +625,22 @@
       code: "Escape",
       windowsVirtualKeyCode: 27
     });
-    if (!escRes.ok) {
+    if (!escRes.ok && !isBatchAborted()) {
       await sleep(200);
-      const attach = await sendToBackground({ type: "BATCH_ATTACH" });
-      if (attach.ok) {
-        escRes = await sendToBackground({
-          type: "BATCH_DISPATCH_KEY",
-          key: "Escape",
-          code: "Escape",
-          windowsVirtualKeyCode: 27
-        });
+      if (!isBatchAborted()) {
+        const attach = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
+        if (attach.ok) {
+          escRes = await sendToBackground({
+            type: "BATCH_DISPATCH_KEY",
+            key: "Escape",
+            code: "Escape",
+            windowsVirtualKeyCode: 27
+          });
+        }
       }
+    }
+    if (isBatchAborted()) {
+      return finish(false, "batch_aborted", "cancelled by user");
     }
     if (!escRes.ok) {
       return finish(false, "key_dispatch_failed", escRes.error || "escape_failed");
@@ -585,7 +672,10 @@
     sleep,
     waitFor,
     sendToBackground,
+    isPhotoNotFoundPage,
+    isInfoPanelReadOnlyUnowned,
     isInfoPanelOpen,
+    findInfoButton,
     findVisibleDescriptionTextarea,
     ensureInfoPanelOpen,
     extractMetadataOnce,

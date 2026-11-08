@@ -65,6 +65,8 @@
         `AI Plus: ${cur} / ${total} (${done} done, ${skipped} skipped)`,
       statusPaused: (processed, total, done, skipped) =>
         `Paused at ${processed} / ${total} (${done} done, ${skipped} skipped)`,
+      statusCancelled: (done, skipped) =>
+        `Cancelled: ${done} described, ${skipped} skipped`,
       statusFinished: (done, skipped, failed) =>
         `Finished: ${done} described, ${skipped} skipped, ${failed} failed`,
       pauseBtn: "Pause",
@@ -114,6 +116,8 @@
         `AI Plus : ${cur} / ${total} (${done} terminé${done > 1 ? "s" : ""}, ${skipped} ignoré${skipped > 1 ? "s" : ""})`,
       statusPaused: (processed, total, done, skipped) =>
         `En pause à ${processed} / ${total} (${done} terminé${done > 1 ? "s" : ""}, ${skipped} ignoré${skipped > 1 ? "s" : ""})`,
+      statusCancelled: (done, skipped) =>
+        `Annulé : ${done} décrite${done > 1 ? "s" : ""}, ${skipped} ignorée${skipped > 1 ? "s" : ""}`,
       statusFinished: (done, skipped, failed) =>
         `Terminé : ${done} décrite${done > 1 ? "s" : ""}, ${skipped} ignorée${skipped > 1 ? "s" : ""}, ${failed} échec${failed > 1 ? "s" : ""}`,
       pauseBtn: "Pause",
@@ -163,6 +167,8 @@
         `AI Plus: ${cur} / ${total} (${done} completada${done === 1 ? "" : "s"}, ${skipped} omitida${skipped === 1 ? "" : "s"})`,
       statusPaused: (processed, total, done, skipped) =>
         `En pausa en ${processed} / ${total} (${done} completada${done === 1 ? "" : "s"}, ${skipped} omitida${skipped === 1 ? "" : "s"})`,
+      statusCancelled: (done, skipped) =>
+        `Cancelado: ${done} descrita${done === 1 ? "" : "s"}, ${skipped} omitida${skipped === 1 ? "" : "s"}`,
       statusFinished: (done, skipped, failed) =>
         `Finalizado: ${done} descrita${done === 1 ? "" : "s"}, ${skipped} omitida${skipped === 1 ? "" : "s"}, ${failed} fallida${failed === 1 ? "" : "s"}`,
       pauseBtn: "Pausar",
@@ -783,12 +789,15 @@
     const processed = window.WPhotoBatchRunner.getProcessedCount(batch);
     const isRunning = batch.completedAt === null && batch.lastReason === null;
     const isPaused = batch.lastReason === "paused";
+    const isCancelled = batch.lastReason === "cancelled";
 
     const textSpan = document.createElement("span");
     if (isRunning) {
       textSpan.textContent = t.statusRunning(Math.min(processed + 1, total), total, done, skipped);
     } else if (isPaused) {
       textSpan.textContent = t.statusPaused(processed, total, done, skipped);
+    } else if (isCancelled) {
+      textSpan.textContent = t.statusCancelled(done, skipped);
     } else {
       textSpan.textContent = t.statusFinished(done, skipped, failed);
     }

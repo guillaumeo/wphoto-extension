@@ -339,10 +339,23 @@
 
     const tpl = getPromptConfig(lang);
     const sysInst = tpl.system ? { parts: [{ text: tpl.system }] } : undefined;
+    const isAborted = () =>
+      typeof window !== "undefined" &&
+      typeof window.__wphotoIsBatchAborted === "function" &&
+      window.__wphotoIsBatchAborted();
+
+    let abortController = null;
+    if (typeof AbortController === "function") {
+      abortController = new AbortController();
+      if (typeof window !== "undefined") {
+        window.__wphotoActiveAbortController = abortController;
+      }
+    }
 
     const reqInit = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      ...(abortController ? { signal: abortController.signal } : {}),
       body: JSON.stringify({
         contents: [{ parts }],
         ...(sysInst ? { system_instruction: sysInst } : {}),
@@ -359,6 +372,9 @@
         : DEFAULT_429_BACKOFF_MS.length;
 
       for (let attempt = 0; attempt <= maxRetries429; attempt++) {
+        if (isAborted()) {
+          return { error: "batch_aborted", retries429 };
+        }
         resp = await fetch(buildUrl(activeModel), reqInit);
         if (resp.status === 404 && activeModel === "gemini-3.1-flash-lite") {
           activeModel = "gemini-3.1-flash-lite-preview";
@@ -373,9 +389,16 @@
             } catch (e) {}
           }
           await sleepMs(waitMs);
+          if (isAborted()) {
+            return { error: "batch_aborted", retries429 };
+          }
           continue;
         }
         break;
+      }
+
+      if (isAborted()) {
+        return { error: "batch_aborted", retries429 };
       }
 
       if (!resp.ok) {
@@ -403,7 +426,18 @@
         ? { text: text.trim(), retries429 }
         : { error: "empty_gemini_reply", retries429 };
     } catch (e) {
+      if (isAborted() || e?.name === "AbortError") {
+        return { error: "batch_aborted" };
+      }
       return { error: "gemini_fetch_failed: " + String(e?.message || e) };
+    } finally {
+      if (
+        typeof window !== "undefined" &&
+        abortController &&
+        window.__wphotoActiveAbortController === abortController
+      ) {
+        window.__wphotoActiveAbortController = null;
+      }
     }
   }
 
@@ -538,6 +572,9 @@
     if (typeof document !== "undefined" && document.querySelector("video")) {
       return finish(false, "skipped_video", "video items are not supported");
     }
+    if (dom.isPhotoNotFoundPage?.()) {
+      return finish(false, "skipped_unowned", "photo not found (not in your library)");
+    }
 
     // Ensure the main viewer image has mounted/hydrated before checking or toggling the Info panel
     let photoImg = findMainPhotoImage();
@@ -547,7 +584,18 @@
       if (typeof document !== "undefined" && document.querySelector("video")) {
         return finish(false, "skipped_video", "video items are not supported");
       }
+      if (dom.isPhotoNotFoundPage?.()) {
+        return finish(false, "skipped_unowned", "photo not found (not in your library)");
+      }
       photoImg = findMainPhotoImage();
+      if (
+        !photoImg &&
+        performance.now() - preHydrateStart >= 1200 &&
+        !dom.findInfoButton?.() &&
+        !dom.isInfoPanelOpen?.()
+      ) {
+        break;
+      }
     }
 
     logStep("panel_open_start");
@@ -555,6 +603,9 @@
     const panelRes = await dom.ensureInfoPanelOpen();
     if (!panelRes.ok) {
       logStep("panel_open_failed", `${panelRes.error} (${panelRes.detail})`);
+      if (panelRes.error === "info_button_not_found" && !photoImg) {
+        return finish(false, "skipped_unowned", "photo not found or uneditable");
+      }
       return finish(false, panelRes.error, panelRes.detail);
     }
     timing.panelOpenMs = Math.round(performance.now() - panelStart);
@@ -585,6 +636,11 @@
       "metadata_fetch_done",
       `${timing.metadataMs}ms (people=${timing.peopleCount}, location=${timing.hadLocation})`
     );
+
+    if (await dom.isInfoPanelReadOnlyUnowned?.()) {
+      logStep("skipped_unowned", "info panel has no editable description field");
+      return finish(false, "skipped_unowned", "photo cannot be edited (not owned by you)");
+    }
 
     if (!shouldOverwrite) {
       const ta = dom.findVisibleDescriptionTextarea();
@@ -631,6 +687,9 @@
             logStep("cloud_retry_429", `attempt=${attempt} wait=${waitMs}ms`);
           }
         });
+        if (cloudRes?.error === "batch_aborted") {
+          return finish(false, "batch_aborted", "cancelled by user");
+        }
         if (cloudRes && !cloudRes.error && typeof cloudRes.text === "string") {
           const cleaned = cleanGeneratedCaption(cloudRes.text);
           if (cleaned.length > 0) {
@@ -673,6 +732,14 @@
           return finish(false, "skipped_no_metadata", genErrorDetail || "no metadata for fallback");
         }
       }
+    }
+
+    if (
+      typeof window !== "undefined" &&
+      typeof window.__wphotoIsBatchAborted === "function" &&
+      window.__wphotoIsBatchAborted()
+    ) {
+      return finish(false, "batch_aborted", "cancelled by user");
     }
 
     if (!shouldOverwrite) {
@@ -719,6 +786,13 @@
       const stackThumbs = findStackThumbs();
       if (stackThumbs.length > 1) {
         for (let idx = 0; idx < stackThumbs.length; idx++) {
+          if (
+            typeof window !== "undefined" &&
+            typeof window.__wphotoIsBatchAborted === "function" &&
+            window.__wphotoIsBatchAborted()
+          ) {
+            break;
+          }
           const curThumbs = findStackThumbs();
           const targetThumb =
             curThumbs[idx] ||

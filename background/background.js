@@ -2,6 +2,7 @@
 // Handles Chrome Debugger Protocol (CDP) trusted input, Network save quiescence, and Local Gemini Nano bridge injection.
 
 let attachedTabId = null;
+let userDetachedTabId = null;
 const inFlightRequests = new Map();
 const ignoredTelemetryIds = new Set();
 const recentSaveTimestamps = [];
@@ -138,7 +139,20 @@ try {
     const tabId = source.tabId;
     if (tabId !== undefined && attachedTabId === tabId) {
       attachedTabId = null;
+      userDetachedTabId = tabId;
       resetNetworkState();
+      try {
+        if (chrome.storage?.local) {
+          chrome.storage.local.get("activeBatch", (data) => {
+            const batch = data?.activeBatch;
+            if (batch && (batch.completedAt === null || batch.lastReason === null)) {
+              batch.lastReason = "cancelled";
+              batch.completedAt = batch.completedAt || Date.now();
+              chrome.storage.local.set({ activeBatch: batch });
+            }
+          });
+        }
+      } catch (e) {}
       chrome.tabs.sendMessage(tabId, {
         type: "BATCH_UNEXPECTED_DETACH",
         reason: String(reason)
@@ -399,6 +413,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (type) {
       case "BATCH_ATTACH": {
+        if (message.explicitStart) {
+          userDetachedTabId = null;
+        } else if (userDetachedTabId === tabId) {
+          sendResponse({ ok: false, error: "detached_by_user" });
+          return;
+        }
+        if (message.forPhotoStep && chrome.storage?.local) {
+          try {
+            const stored = await chrome.storage.local.get("activeBatch");
+            const active = stored?.activeBatch;
+            if (!active || active.completedAt !== null || active.lastReason !== null) {
+              sendResponse({ ok: false, error: "batch_not_active" });
+              return;
+            }
+          } catch (e) {}
+        }
         if (attachedTabId === tabId) {
           try {
             await configureAttachedSession(tabId);
