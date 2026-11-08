@@ -4,8 +4,27 @@
 
 (function () {
   const DESCRIPTION_JSNAME = "YPqjbf";
-  const CLOSE_INFO_SELECTOR =
-    'button[aria-label="Close info"], button[aria-label="Fermer les infos"], button[aria-label="Cerrar información"]';
+  const CLOSE_INFO_SELECTOR = [
+    'button[aria-label="Close info"]',
+    'button[aria-label="Fermer les infos"]',
+    'button[aria-label="Fermer"]',
+    'button[aria-label="Cerrar información"]',
+    'button[aria-label="Cerrar"]',
+    '[role="button"][aria-label="Close info"]',
+    '[role="button"][aria-label="Fermer les infos"]',
+    '[role="button"][aria-label="Cerrar información"]'
+  ].join(", ");
+  const OPEN_INFO_SELECTOR = [
+    'button[aria-label="Open info"]',
+    'button[aria-label="Informations"]',
+    'button[aria-label="Info"]',
+    'button[aria-label="Abrir información"]',
+    'button[jslog*="8918"]',
+    '[role="button"][aria-label="Open info"]',
+    '[role="button"][aria-label="Informations"]',
+    '[role="button"][aria-label="Info"]',
+    '[role="button"][aria-label="Abrir información"]'
+  ].join(", ");
   const PLACEHOLDER_SELECTOR = [
     '[aria-label="Add a description"]',
     '[aria-label="Ajouter une description"]',
@@ -117,8 +136,31 @@
   function isElementVisible(el) {
     if (!el) return false;
     if (el.offsetParent === null) return false;
-    if (typeof el.closest === "function" && el.closest('[aria-hidden="true"], [hidden]')) {
-      return false;
+    if (typeof el.closest === "function") {
+      const hiddenAnc = el.closest('[aria-hidden="true"], [hidden], [inert]');
+      if (
+        hiddenAnc &&
+        (hiddenAnc !== el ||
+          el.hidden === true ||
+          (typeof el.getAttribute === "function" &&
+            (el.getAttribute("aria-hidden") === "true" || el.getAttribute("hidden") !== null)))
+      ) {
+        return false;
+      }
+    }
+    if (typeof window !== "undefined" && typeof window.getComputedStyle === "function") {
+      try {
+        const st = window.getComputedStyle(el);
+        if (
+          st &&
+          (st.display === "none" ||
+            st.visibility === "hidden" ||
+            st.visibility === "collapse" ||
+            parseFloat(st.opacity) === 0)
+        ) {
+          return false;
+        }
+      } catch (e) {}
     }
     if (typeof el.checkVisibility === "function") {
       try {
@@ -145,18 +187,43 @@
       ) {
         const right = typeof r.right === "number" ? r.right : r.left + (r.width || 0);
         const bottom = typeof r.bottom === "number" ? r.bottom : (r.top || 0) + (r.height || 0);
-        if (right <= 0 || r.left >= window.innerWidth) return false;
+        const cx = r.left + (r.width || 0) / 2;
+        if (right <= 0 || r.left >= window.innerWidth || cx <= 0 || cx >= window.innerWidth) {
+          return false;
+        }
         if (
           typeof window.innerHeight === "number" &&
           window.innerHeight > 0 &&
-          typeof r.top === "number" &&
-          (bottom <= 0 || r.top >= window.innerHeight)
+          typeof r.top === "number"
         ) {
-          return false;
+          const cy = r.top + (r.height || 0) / 2;
+          if (bottom <= 0 || r.top >= window.innerHeight || cy <= 0 || cy >= window.innerHeight) {
+            return false;
+          }
         }
       }
     }
     return true;
+  }
+
+  function queryVisibleElements(selector, root = typeof document !== "undefined" ? document : null) {
+    if (!root || !selector) return [];
+    const results = [];
+    if (typeof root.querySelectorAll === "function") {
+      for (const el of Array.from(root.querySelectorAll(selector))) {
+        if (isElementVisible(el)) results.push(el);
+      }
+    }
+    if (results.length === 0 && typeof root.querySelector === "function") {
+      const single = root.querySelector(selector);
+      if (single && isElementVisible(single)) results.push(single);
+    }
+    return results;
+  }
+
+  function findFirstVisible(selector, root) {
+    const visible = queryVisibleElements(selector, root);
+    return visible.length > 0 ? visible[visible.length - 1] : null;
   }
 
   const PHOTO_NOT_FOUND_REGEX =
@@ -190,8 +257,8 @@
           return true;
         }
       }
-      const dls = document.querySelectorAll("dl");
-      if (dls && dls.length > 0 && isInfoPanelOpen()) {
+      const dls = queryVisibleElements("dl");
+      if (dls.length > 0 && isInfoPanelOpen()) {
         const ta = await waitFor(findVisibleDescriptionTextarea, 600, 80);
         if (!ta) return true;
       }
@@ -201,8 +268,35 @@
 
   function isInfoPanelOpen() {
     if (typeof document === "undefined") return false;
-    if (isElementVisible(document.querySelector(CLOSE_INFO_SELECTOR))) return true;
-    return isElementVisible(document.querySelector(`textarea[jsname="${DESCRIPTION_JSNAME}"]`));
+    // 1. Visible Close Info button across any mounted slide
+    if (findFirstVisible(CLOSE_INFO_SELECTOR)) return true;
+    // 2. Visible Description textarea across any mounted slide
+    if (findFirstVisible(DIRECT_TEXTAREA_SELECTOR)) return true;
+    // 3. Info toggle button explicitly reporting expanded/pressed state
+    for (const btn of queryVisibleElements(OPEN_INFO_SELECTOR)) {
+      if (
+        typeof btn.getAttribute === "function" &&
+        (btn.getAttribute("aria-expanded") === "true" || btn.getAttribute("aria-pressed") === "true")
+      ) {
+        return true;
+      }
+    }
+    // 4. Visible <dl> details list inside the right-hand info drawer
+    if (
+      typeof window !== "undefined" &&
+      typeof window.innerWidth === "number" &&
+      window.innerWidth > 0
+    ) {
+      for (const dl of queryVisibleElements("dl")) {
+        if (typeof dl.getBoundingClientRect === "function") {
+          const r = dl.getBoundingClientRect();
+          if (r && r.width >= 120 && r.left >= window.innerWidth * 0.5) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   function findVisibleDescriptionTextarea(options = {}) {
@@ -280,19 +374,21 @@
 
   function findInfoButton() {
     if (typeof document === "undefined") return null;
-    const byLabel = document.querySelector(
-      'button[aria-label="Open info"], button[aria-label="Informations"], button[aria-label="Info"], button[aria-label="Abrir información"], button[jslog*="8918"]'
-    );
-    if (byLabel && byLabel.offsetParent !== null) return byLabel;
+    const byLabel = findFirstVisible(OPEN_INFO_SELECTOR);
+    if (byLabel) return byLabel;
 
-    for (const svgPath of Array.from(document.querySelectorAll("button svg path, [role='button'] svg path"))) {
-      const d = svgPath.getAttribute("d") || "";
-      if (d.includes("M11 7h2v2h-2zm0 4h2v6h-2z")) {
-        const btn = svgPath.closest('button, [role="button"]');
-        if (btn && btn.offsetParent !== null) return btn;
+    if (typeof document.querySelectorAll === "function") {
+      for (const svgPath of Array.from(
+        document.querySelectorAll("button svg path, [role='button'] svg path")
+      )) {
+        const d = svgPath.getAttribute("d") || "";
+        if (d.includes("M11 7h2v2h-2zm0 4h2v6h-2z") || d.includes("M11,7h2v2h-2V7z")) {
+          const btn = svgPath.closest('button, [role="button"]');
+          if (btn && isElementVisible(btn)) return btn;
+        }
       }
     }
-    return byLabel || null;
+    return null;
   }
 
   function triggerDirectDomClick(btn) {
@@ -389,6 +485,11 @@
       logPanel("info button not found in DOM");
     }
 
+    if (isInfoPanelOpen()) {
+      markPanelSeenOpen();
+      return { ok: true };
+    }
+
     logPanel("attempting shortcut 'z' key dispatch");
     await sendToBackground({
       type: "BATCH_DISPATCH_KEY",
@@ -407,6 +508,11 @@
       logPanel("WARNING: panel flapped/closed right after 'z' key! Continuing to CDP click");
     } else {
       logPanel("panel not opened within 700ms of 'z' key");
+    }
+
+    if (isInfoPanelOpen()) {
+      markPanelSeenOpen();
+      return { ok: true };
     }
 
     if (!btn) btn = findInfoButton();
@@ -437,17 +543,17 @@
 
   function findInfoPanelRoot() {
     if (typeof document === "undefined") return null;
-    for (const dl of Array.from(document.querySelectorAll("dl"))) {
-      if (dl.offsetParent !== null) {
-        return dl.closest('[role="region"]') || dl.parentElement?.parentElement || dl.parentElement;
-      }
+    const visibleDls = queryVisibleElements("dl");
+    if (visibleDls.length > 0) {
+      const dl = visibleDls[visibleDls.length - 1];
+      return dl.closest?.('[role="region"]') || dl.parentElement?.parentElement || dl.parentElement;
     }
-    const closeBtn = document.querySelector(CLOSE_INFO_SELECTOR);
-    const ta = document.querySelector(`textarea[jsname="${DESCRIPTION_JSNAME}"]`);
+    const closeBtn = findFirstVisible(CLOSE_INFO_SELECTOR);
+    const ta = findFirstVisible(DIRECT_TEXTAREA_SELECTOR);
     if (closeBtn && ta) {
       let cur = closeBtn.parentElement;
       while (cur && cur !== document.body) {
-        if (cur.contains(ta)) return cur;
+        if (typeof cur.contains === "function" && cur.contains(ta)) return cur;
         cur = cur.parentElement;
       }
     }

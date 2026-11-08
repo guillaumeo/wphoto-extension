@@ -757,6 +757,25 @@ def main():
             throw new Error("Expected ensureInfoPanelOpen to fast-fail with skipped_unowned on Photo not found page");
           }}
 
+          // 5. Multi-slide DOM: hidden previous slide node first in DOM order must not mask visible active slide node
+          globalThis.document.body = {{ innerText: "" }};
+          const hiddenSlideCloseBtn = {{
+            offsetParent: null,
+            getBoundingClientRect: () => ({{ left: 0, top: 0, width: 0, height: 0 }})
+          }};
+          const visibleSlideCloseBtn = {{
+            offsetParent: {{}},
+            getBoundingClientRect: () => ({{ left: 900, top: 20, width: 24, height: 24 }})
+          }};
+          globalThis.document.querySelector = () => hiddenSlideCloseBtn;
+          globalThis.document.querySelectorAll = (sel) => {{
+            if (sel.includes("Close info")) return [hiddenSlideCloseBtn, visibleSlideCloseBtn];
+            return [];
+          }};
+          if (dom.isInfoPanelOpen() !== true) {{
+            throw new Error("Expected isInfoPanelOpen() to detect visible Close info on active slide despite hidden first slide node");
+          }}
+
           print("DOM_03_OK");
         }})();
         """
