@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Google Photos AI Description",
+  "name": "AI Plus",
   "version": "1.0.0",
   "description": "Generate concise encyclopedic AI descriptions for Google Photos in multiple languages.",
   "background": {

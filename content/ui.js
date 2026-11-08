@@ -680,22 +680,204 @@
     }
   }
 
+  function isElementVisible(el) {
+    if (!el) return false;
+    if (typeof el.checkVisibility === "function") {
+      return el.checkVisibility({
+        visibilityProperty: true,
+        opacityProperty: true,
+        contentVisibilityAuto: true
+      });
+    }
+    return el.offsetParent !== null;
+  }
+
   function findSelectionActionContainer() {
     const clearBtn = document.querySelector(
-      'button[aria-label="Clear selection"], button[aria-label="Annuler la sélection"], button[aria-label="Borrar selección"], button[jslog*="8886"]'
+      'button[aria-label="Clear selection"], [aria-label="Clear selection"], button[aria-label="Annuler la sélection"], button[aria-label="Borrar selección"], button[jslog*="8886"]'
     );
-    if (!clearBtn || clearBtn.offsetParent === null) return null;
+    if (!clearBtn || !isElementVisible(clearBtn)) return null;
+
     let cur = clearBtn.parentElement;
-    for (let i = 0; i < 6 && cur; i++) {
-      const shareBtn = cur.querySelector(
-        'button[aria-label="Share"], button[aria-label="Partager"], button[aria-label="Compartir"], button[jslog*="8919"]'
-      );
-      if (shareBtn && shareBtn.offsetParent !== null) {
-        return shareBtn.parentElement;
-      }
+    let shareBtn = null;
+    while (
+      cur &&
+      !(shareBtn = cur.querySelector(
+        '[aria-label="Share"], button[aria-label="Partager"], button[aria-label="Compartir"], button[jslog*="8919"]'
+      ))
+    ) {
       cur = cur.parentElement;
     }
+
+    if (shareBtn && isElementVisible(shareBtn)) {
+      const clearAncestors = new Set();
+      for (let p = clearBtn; p; p = p.parentElement) {
+        clearAncestors.add(p);
+      }
+      let commonAncestor = shareBtn;
+      while (commonAncestor && !clearAncestors.has(commonAncestor)) {
+        commonAncestor = commonAncestor.parentElement;
+      }
+      if (commonAncestor && commonAncestor.children) {
+        for (const child of Array.from(commonAncestor.children)) {
+          if (child.contains && child.contains(shareBtn)) {
+            return child;
+          }
+        }
+        return commonAncestor;
+      }
+      return shareBtn.parentElement;
+    }
     return clearBtn.parentElement;
+  }
+
+  function getTopSearchContainers() {
+    const containers = [];
+    if (typeof document === "undefined") return containers;
+    const inputs = Array.from(
+      document.querySelectorAll('input[type="text"], input:not([type]), textarea')
+    ).filter((el) => {
+      const r = el.getBoundingClientRect?.();
+      return r && r.top < 60 && r.width > 0;
+    });
+    for (const input of inputs) {
+      const w = input.getBoundingClientRect().width;
+      let cur = input;
+      for (
+        let i = 0;
+        cur && i < 6 && !(i > 0 && cur.getBoundingClientRect?.().width > 1.5 * w);
+        i++, cur = cur.parentElement
+      ) {
+        containers.push(cur);
+      }
+    }
+    return containers;
+  }
+
+  function isExcludedTopBarNode(el, searchContainers) {
+    if (!el) return true;
+    if (el.closest?.('#gb, [class*="gb_"], [role="search"], form')) return true;
+    return searchContainers.some((c) => c.contains?.(el));
+  }
+
+  function findHomeHeaderAnchor() {
+    if (typeof document === "undefined") return null;
+    const isRtl =
+      typeof getComputedStyle === "function" &&
+      document.documentElement &&
+      getComputedStyle(document.documentElement).direction === "rtl";
+    const searchContainers = getTopSearchContainers();
+    const xCoord = (el) => {
+      const left = el.getBoundingClientRect().left;
+      return isRtl ? -left : left;
+    };
+    const candidates = Array.from(
+      document.querySelectorAll('a[aria-label], button[aria-label], [role="button"][aria-label]')
+    )
+      .filter((el) => {
+        if (
+          el.id === TRIGGER_BTN_ID ||
+          !isElementVisible(el) ||
+          isExcludedTopBarNode(el, searchContainers)
+        ) {
+          return false;
+        }
+        const r = el.getBoundingClientRect?.();
+        return r && r.top < 60 && r.width >= 24 && r.width <= 60 && r.height >= 24 && r.height <= 60;
+      })
+      .sort((a, b) => xCoord(a) - xCoord(b));
+
+    if (candidates.length === 0) return null;
+    let anchor = candidates[candidates.length - 1];
+    for (let i = candidates.length - 1; i > 0; i--) {
+      if (xCoord(candidates[i]) - xCoord(candidates[i - 1]) > 120) break;
+      anchor = candidates[i - 1];
+    }
+    const halfW = (typeof window !== "undefined" ? window.innerWidth : 1280) / 2;
+    const anchorLeft = anchor.getBoundingClientRect().left;
+    const onActionSide = isRtl ? anchorLeft < halfW : anchorLeft > halfW;
+    return onActionSide ? anchor : null;
+  }
+
+  function findHomeFlexHeaderBar() {
+    if (typeof document === "undefined") return null;
+    const searchContainers = getTopSearchContainers();
+    const firstTopItem = Array.from(
+      document.querySelectorAll("a[aria-label], button[aria-label]")
+    ).find(
+      (el) =>
+        el.id !== TRIGGER_BTN_ID &&
+        isElementVisible(el) &&
+        !isExcludedTopBarNode(el, searchContainers) &&
+        el.getBoundingClientRect?.().top < 60
+    );
+    if (!firstTopItem) return null;
+    let cur = firstTopItem.parentElement;
+    const winW = typeof window !== "undefined" ? window.innerWidth : 1280;
+    for (let i = 0; i < 8 && cur; i++, cur = cur.parentElement) {
+      const r = cur.getBoundingClientRect?.();
+      const style = typeof getComputedStyle === "function" ? getComputedStyle(cur) : null;
+      if (
+        style &&
+        style.display === "flex" &&
+        r &&
+        r.top < 20 &&
+        r.height > 0 &&
+        r.height < 100 &&
+        r.width >= 0.9 * winW
+      ) {
+        if (
+          searchContainers.includes(cur) ||
+          (cur.querySelector?.('input[type="text"], [role="search"]') && cur.children.length <= 1)
+        ) {
+          continue;
+        }
+        return cur;
+      }
+    }
+    return null;
+  }
+
+  function insertBeforeTopBarAnchor(btn, anchor) {
+    const parent = anchor.parentElement;
+    if (!parent) return;
+    parent.insertBefore(btn, anchor);
+    for (let i = 0; i < 8; i++) {
+      const curParent = btn.parentElement;
+      if (!curParent || !curParent.parentElement) return;
+      const rect = curParent.getBoundingClientRect?.();
+      if (!rect || rect.width > 60) return;
+      curParent.parentElement.insertBefore(btn, curParent);
+    }
+  }
+
+  function alignTopBarButtonVertically(btn, anchor) {
+    const bRect = btn.getBoundingClientRect?.();
+    const aRect = anchor.getBoundingClientRect?.();
+    if (!bRect || !aRect || bRect.height === 0 || aRect.height === 0) return;
+    const delta = Math.round(aRect.top + aRect.height / 2 - (bRect.top + bRect.height / 2));
+    if (Math.abs(delta) < 2 || Math.abs(delta) > 12) return;
+    const curTop = parseFloat(btn.style.top) || 0;
+    btn.style.position = "relative";
+    btn.style.top = `${curTop + delta}px`;
+  }
+
+  function isAdjacentToAnchor(btn, anchor) {
+    const parent = btn.parentElement;
+    if (!parent || !parent.contains?.(anchor)) return false;
+    const next = btn.nextElementSibling;
+    return next !== null && (next === anchor || next.contains?.(anchor));
+  }
+
+  function isMountedInValidTopBarPosition(btn) {
+    const r = btn.getBoundingClientRect?.();
+    if (!r || (r.width === 0 && r.height === 0)) return false;
+    const isRtl =
+      typeof getComputedStyle === "function" &&
+      document.documentElement &&
+      getComputedStyle(document.documentElement).direction === "rtl";
+    const halfW = (typeof window !== "undefined" ? window.innerWidth : 1280) / 2;
+    return isRtl ? r.left < halfW : r.left > halfW;
   }
 
   function ensureTriggerButtonMounted() {
@@ -718,6 +900,7 @@
       btn = document.createElement("button");
       btn.id = TRIGGER_BTN_ID;
       btn.type = "button";
+      btn.dir = "ltr";
       btn.textContent = "AI Plus";
       btn.setAttribute("aria-label", "AI Plus");
       btn.setAttribute("aria-haspopup", "dialog");
@@ -735,18 +918,53 @@
     applyThemeAttr(btn);
     btn.setAttribute("aria-expanded", String(state.menuOpen));
 
-    // 1. Selection bar placement
+    // 1. Selection bar placement (leftmost item of the right-side selection action cluster)
     const selContainer = findSelectionActionContainer();
     if (selContainer) {
       btn.removeAttribute("data-pinned");
-      if (btn.parentElement !== selContainer) {
+      btn.setAttribute("data-placement", "selection");
+      btn.style.position = "";
+      btn.style.top = "";
+      if (btn.parentElement !== selContainer || btn.previousElementSibling !== null) {
         selContainer.insertBefore(btn, selContainer.firstChild);
       }
       return;
     }
 
-    // 2. Fallback pinned header placement (library / album view)
+    // 2. Home / Album header action cluster placement (before top-right action buttons)
+    btn.setAttribute("data-placement", "home");
+    const anchor = findHomeHeaderAnchor();
+    if (anchor && anchor.parentElement) {
+      btn.removeAttribute("data-pinned");
+      if (!isAdjacentToAnchor(btn, anchor)) {
+        btn.style.position = "";
+        btn.style.top = "";
+        insertBeforeTopBarAnchor(btn, anchor);
+      }
+      if (isMountedInValidTopBarPosition(btn)) {
+        alignTopBarButtonVertically(btn, anchor);
+        return;
+      }
+    }
+
+    // 3. Secondary flex header bar fallback
+    const flexBar = findHomeFlexHeaderBar();
+    if (flexBar) {
+      btn.removeAttribute("data-pinned");
+      btn.style.position = "";
+      btn.style.top = "";
+      if (btn.parentElement !== flexBar) {
+        flexBar.appendChild(btn);
+      }
+      if (isMountedInValidTopBarPosition(btn)) {
+        return;
+      }
+    }
+
+    // 4. Final fallback: pinned top-right header placement
     btn.setAttribute("data-pinned", "true");
+    btn.style.position = "";
+    btn.style.top = "";
     if (btn.parentElement !== document.body) {
       document.body.appendChild(btn);
     }
@@ -811,6 +1029,8 @@
     state,
     maskApiKey,
     detectGooglePhotosTheme,
+    findSelectionActionContainer,
+    findHomeHeaderAnchor,
     saveGeminiApiKey,
     clearGeminiApiKey,
     renderMenu,

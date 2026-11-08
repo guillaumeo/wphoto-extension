@@ -44,24 +44,31 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 36px;
+  height: 32px;
   padding: 0 14px;
   margin: 0 8px;
   border: 1px solid var(--wphoto-border);
-  border-radius: 8px;
+  border-radius: 20px;
   background-color: var(--wphoto-bg);
   color: var(--wphoto-text);
   font-family: var(--wphoto-font);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 20px;
+  line-height: 1;
   letter-spacing: 0.15px;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  vertical-align: middle;
+  pointer-events: auto;
+  visibility: visible;
+  vertical-align: 8px;
   align-self: center;
   z-index: 2147483640;
+}
+
+#wphoto-trigger-btn[data-placement="selection"] {
+  margin: 0 8px 0 0;
+  vertical-align: middle;
 }
 
 #wphoto-trigger-btn:hover {
@@ -78,8 +85,9 @@
 #wphoto-trigger-btn[data-pinned="true"] {
   position: fixed;
   top: 14px;
-  right: 120px;
+  right: 112px;
   margin: 0;
+  vertical-align: baseline;
 }
 
 /* Single Dropdown Menu Card matching Google Photos native popover menus */

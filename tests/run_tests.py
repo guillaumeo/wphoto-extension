@@ -81,6 +81,7 @@ def main():
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
         assert manifest.get("manifest_version") == 3
+        assert manifest.get("name") == "AI Plus", f"Expected manifest name 'AI Plus', got {manifest.get('name')}"
         assert "icons" not in manifest, "manifest.json must not declare icons"
         assert "action" not in manifest or "default_icon" not in manifest.get("action", {})
         assert manifest["background"]["service_worker"] == "background/background.js"
@@ -1032,7 +1033,12 @@ def main():
             click() {{
               if (this.listeners.click) this.listeners.click({{ stopPropagation: () => {{}} }});
             }},
-            getBoundingClientRect: () => ({{ left: 200, top: 20, right: 300, bottom: 56, width: 100, height: 36 }}),
+            getBoundingClientRect() {{
+              const pLeft = this.parentElement && this.parentElement !== bodyEl && this.parentElement.getBoundingClientRect
+                ? this.parentElement.getBoundingClientRect().left
+                : 200;
+              return {{ left: pLeft, top: 20, right: pLeft + 100, bottom: 56, width: 100, height: 36 }};
+            }},
             querySelectorAll(sel) {{
               let out = [];
               const walk = (node) => {{
@@ -1149,6 +1155,28 @@ def main():
           window.WPhotoUi.ensureTriggerButtonMounted();
           if (elementsById["wphoto-trigger-btn"] || elementsById["wphoto-menu-card"] || window.WPhotoUi.state.menuOpen) {{
             throw new Error("Expected menu and trigger button to be disabled/removed when viewing a single photo");
+          }}
+
+          // Test top-bar action cluster placement when returning to /album/A1
+          globalThis.location.pathname = "/album/A1";
+          globalThis.location.href = "https://photos.google.com/album/A1";
+          const topBarCluster = makeEl("div");
+          topBarCluster.getBoundingClientRect = () => ({{ left: 850, top: 8, width: 320, height: 48 }});
+          topBarCluster.contains = (node) => topBarCluster.children.includes(node);
+          const createIconBtn = makeEl("button");
+          createIconBtn.setAttribute("aria-label", "Create");
+          createIconBtn.getBoundingClientRect = () => ({{ left: 920, top: 12, width: 40, height: 40 }});
+          createIconBtn.closest = () => null;
+          topBarCluster.appendChild(createIconBtn);
+
+          globalThis.document.querySelectorAll = (sel) => {{
+            if (sel.includes('a[aria-label]')) return [createIconBtn];
+            return [];
+          }};
+          window.WPhotoUi.ensureTriggerButtonMounted();
+          const remounted = elementsById["wphoto-trigger-btn"];
+          if (!remounted || remounted.parentElement !== topBarCluster || remounted.getAttribute("data-pinned") !== null || remounted.getAttribute("data-placement") !== "home") {{
+            throw new Error("Expected trigger button to mount inside top-bar right action cluster before Create button");
           }}
 
           print("UI_01_OK");
