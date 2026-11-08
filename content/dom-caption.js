@@ -48,17 +48,45 @@
     });
   }
 
+  let panelSeenOpenInMemory = false;
+
+  function markPanelSeenOpen() {
+    panelSeenOpenInMemory = true;
+    try {
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem("__wphotoPanelOpen", "1");
+      }
+    } catch (e) {}
+  }
+
+  function wasPanelPreviouslyOpen() {
+    if (panelSeenOpenInMemory) return true;
+    try {
+      if (typeof sessionStorage !== "undefined") {
+        return sessionStorage.getItem("__wphotoPanelOpen") === "1";
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function isElementVisible(el) {
+    if (!el) return false;
+    if (el.offsetParent === null) return false;
+    if (typeof el.getBoundingClientRect === "function") {
+      const r = el.getBoundingClientRect();
+      if (r && (r.width === 0 || r.height === 0)) return false;
+    }
+    return true;
+  }
+
   function isInfoPanelOpen() {
     if (typeof document === "undefined") return false;
     const closeBtn = document.querySelector(
       'button[aria-label="Close info"], button[aria-label="Fermer les infos"], button[aria-label="Cerrar información"]'
     );
-    if (closeBtn) return true;
+    if (isElementVisible(closeBtn)) return true;
     const ta = document.querySelector(`textarea[jsname="${DESCRIPTION_JSNAME}"]`);
-    if (ta) {
-      const rect = ta.getBoundingClientRect?.();
-      if (!rect || (rect.width > 0 && rect.height > 0)) return true;
-    }
+    if (isElementVisible(ta)) return true;
     return false;
   }
 
@@ -122,7 +150,7 @@
   function triggerDirectDomClick(btn) {
     if (!btn) return false;
     try {
-      for (const evtName of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      for (const evtName of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
         const EventCtor = window.PointerEvent || window.MouseEvent || Event;
         const evt = new EventCtor(evtName, {
           bubbles: true,
@@ -140,7 +168,7 @@
     }
   }
 
-  async function ensureInfoPanelOpen() {
+  async function ensureInfoPanelOpen({ forceToggleIfNoTextarea = false } = {}) {
     const t0 = performance.now();
     const logPanel = (msg) => {
       try {
@@ -154,24 +182,45 @@
 
     logPanel("ensureInfoPanelOpen started");
     if (isInfoPanelOpen()) {
-      logPanel("already open on start");
-      return { ok: true };
+      if (!forceToggleIfNoTextarea || findVisibleDescriptionTextarea()) {
+        await sleep(150);
+        if (isInfoPanelOpen()) {
+          markPanelSeenOpen();
+          logPanel("already open on start");
+          return { ok: true };
+        }
+        logPanel("panel was open on entry but closed within 150ms; re-opening");
+      } else {
+        logPanel("forceToggleIfNoTextarea: panel appears open but textarea missing; forcing re-open");
+      }
+    } else if (!forceToggleIfNoTextarea && wasPanelPreviouslyOpen()) {
+      logPanel("waiting up to 1200ms for remembered panel hydration");
+      const hydrated = await waitFor(isInfoPanelOpen, 1200, 80);
+      if (hydrated) {
+        await sleep(150);
+        if (isInfoPanelOpen()) {
+          markPanelSeenOpen();
+          logPanel("panel naturally hydrated without click");
+          return { ok: true };
+        }
+      }
     }
 
     let btn = findInfoButton();
     if (btn) {
       logPanel("attempting direct DOM event click on info button");
       triggerDirectDomClick(btn);
-      const opened = await waitFor(isInfoPanelOpen, 600, 60);
+      const opened = await waitFor(isInfoPanelOpen, 700, 60);
       if (opened) {
         logPanel("panel opened via direct click");
-        await sleep(150);
+        await sleep(200);
         if (isInfoPanelOpen()) {
+          markPanelSeenOpen();
           return { ok: true };
         }
         logPanel("WARNING: panel flapped/closed right after direct click! Re-triggering");
       } else {
-        logPanel("panel not opened within 600ms of direct click");
+        logPanel("panel not opened within 700ms of direct click");
       }
     } else {
       logPanel("info button not found in DOM");
@@ -184,16 +233,17 @@
       code: "KeyZ",
       windowsVirtualKeyCode: 90
     });
-    const zOpened = await waitFor(isInfoPanelOpen, 600, 60);
+    const zOpened = await waitFor(isInfoPanelOpen, 700, 60);
     if (zOpened) {
       logPanel("panel opened via 'z' key");
-      await sleep(150);
+      await sleep(200);
       if (isInfoPanelOpen()) {
+        markPanelSeenOpen();
         return { ok: true };
       }
       logPanel("WARNING: panel flapped/closed right after 'z' key! Continuing to CDP click");
     } else {
-      logPanel("panel not opened within 600ms of 'z' key");
+      logPanel("panel not opened within 700ms of 'z' key");
     }
 
     if (!btn) btn = findInfoButton();
@@ -216,6 +266,7 @@
 
     const cdpOpened = await waitFor(isInfoPanelOpen, 5000, 100);
     if (cdpOpened) {
+      markPanelSeenOpen();
       logPanel("panel opened via CDP click");
       return { ok: true };
     }
@@ -376,7 +427,7 @@
       }
       if (!reopenedOnce && performance.now() - waitTaStart > 2500) {
         reopenedOnce = true;
-        ensureInfoPanelOpen().catch(() => {});
+        ensureInfoPanelOpen({ forceToggleIfNoTextarea: true }).catch(() => {});
       }
       return null;
     }, PANEL_OPEN_TIMEOUT_MS);

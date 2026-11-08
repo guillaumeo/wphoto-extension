@@ -157,7 +157,53 @@
     return text.slice(0, CAPTION_MAX_LENGTH);
   }
 
+  let logWriteBusy = false;
+  let logPendingLines = [];
+
+  function flushLogQueue() {
+    if (logWriteBusy || logPendingLines.length === 0) return;
+    logWriteBusy = true;
+    const batchText = logPendingLines.join("");
+    logPendingLines = [];
+    try {
+      let handled = false;
+      const onRead = (data) => {
+        if (handled) return;
+        handled = true;
+        const prev = (data && data.aiDescriptionVerboseLog) || "";
+        const next = () => {
+          logWriteBusy = false;
+          if (logPendingLines.length > 0) flushLogQueue();
+        };
+        try {
+          let setDone = false;
+          const finishSet = () => {
+            if (setDone) return;
+            setDone = true;
+            next();
+          };
+          const p = chrome.storage.local.set({ aiDescriptionVerboseLog: prev + batchText }, finishSet);
+          if (p && typeof p.then === "function") {
+            p.then(finishSet).catch(finishSet);
+          }
+        } catch (e) {
+          next();
+        }
+      };
+      const g = chrome.storage.local.get("aiDescriptionVerboseLog", onRead);
+      if (g && typeof g.then === "function") {
+        g.then(onRead).catch(() => {
+          logWriteBusy = false;
+        });
+      }
+    } catch (e) {
+      logWriteBusy = false;
+    }
+  }
+
   async function clearAiDescLog() {
+    logPendingLines = [];
+    logWriteBusy = false;
     try {
       await chrome.storage.local.set({ aiDescriptionVerboseLog: "" });
     } catch (e) {}
@@ -166,7 +212,7 @@
   async function getAiDescLog() {
     try {
       const data = await chrome.storage.local.get("aiDescriptionVerboseLog");
-      return data?.aiDescriptionVerboseLog || "";
+      return ((data && data.aiDescriptionVerboseLog) || "") + logPendingLines.join("");
     } catch (e) {
       return "";
     }
@@ -174,12 +220,8 @@
 
   function appendAiDescLog(msg) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
-    try {
-      chrome.storage.local.get("aiDescriptionVerboseLog", (data) => {
-        const prev = (data && data.aiDescriptionVerboseLog) || "";
-        chrome.storage.local.set({ aiDescriptionVerboseLog: prev + line });
-      });
-    } catch (e) {}
+    logPendingLines.push(line);
+    flushLogQueue();
   }
 
   if (typeof window !== "undefined") {
@@ -497,6 +539,17 @@
       return finish(false, "skipped_video", "video items are not supported");
     }
 
+    // Ensure the main viewer image has mounted/hydrated before checking or toggling the Info panel
+    let photoImg = findMainPhotoImage();
+    const preHydrateStart = performance.now();
+    while (!photoImg && performance.now() - preHydrateStart < 3500) {
+      await dom.sleep(150);
+      if (typeof document !== "undefined" && document.querySelector("video")) {
+        return finish(false, "skipped_video", "video items are not supported");
+      }
+      photoImg = findMainPhotoImage();
+    }
+
     logStep("panel_open_start");
     const panelStart = performance.now();
     const panelRes = await dom.ensureInfoPanelOpen();
@@ -540,11 +593,13 @@
       }
     }
 
-    let photoImg = findMainPhotoImage();
-    const imgWaitStart = performance.now();
-    while (!photoImg && performance.now() - imgWaitStart < 5000) {
-      await dom.sleep(150);
+    if (!photoImg) {
       photoImg = findMainPhotoImage();
+      const imgWaitStart = performance.now();
+      while (!photoImg && performance.now() - imgWaitStart < 2500) {
+        await dom.sleep(150);
+        photoImg = findMainPhotoImage();
+      }
     }
     logStep("image_found", photoImg ? "ready" : "not_found");
 

@@ -4,7 +4,7 @@
 
 (function () {
   const PHOTO_WALL_CLOCK_TIMEOUT_MS = 60000;
-  const POST_NAV_SETTLE_MS = 900;
+  const POST_NAV_SETTLE_MS = 1100;
   const TRANSIENT_RETRY_ERRORS = new Set([
     "textarea_not_visible",
     "caption_focus_failed",

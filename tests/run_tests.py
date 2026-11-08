@@ -616,6 +616,98 @@ def main():
         dom_02,
     )
 
+    def dom_03():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.PointerEvent = class {{ constructor(t) {{ this.type = t; }} }};
+
+        let fakeClock = 0;
+        let infoBtnClicks = 0;
+        let closeBtnVisible = false;
+        let closeBtnExistsHidden = true;
+
+        globalThis.performance = {{ now: () => fakeClock }};
+        globalThis.setTimeout = (fn, ms) => {{
+          fakeClock += (ms || 50);
+          Promise.resolve().then(fn);
+          return 1;
+        }};
+        globalThis.clearTimeout = () => {{}};
+
+        const sessionStore = {{ "__wphotoPanelOpen": "1" }};
+        globalThis.sessionStorage = {{
+          getItem: (k) => sessionStore[k] || null,
+          setItem: (k, v) => {{ sessionStore[k] = String(v); }}
+        }};
+
+        globalThis.document = {{
+          activeElement: null,
+          querySelector(sel) {{
+            if (sel.includes("Close info")) {{
+              // Simulate slow natural hydration at +400ms
+              if (fakeClock >= 400) closeBtnVisible = true;
+              if (closeBtnVisible) {{
+                return {{
+                  offsetParent: {{}},
+                  getBoundingClientRect: () => ({{ left: 10, top: 10, width: 24, height: 24 }})
+                }};
+              }}
+              if (closeBtnExistsHidden) {{
+                return {{
+                  offsetParent: null,
+                  getBoundingClientRect: () => ({{ left: 0, top: 0, width: 0, height: 0 }})
+                }};
+              }}
+              return null;
+            }}
+            if (sel.includes("Open info")) {{
+              return {{
+                offsetParent: {{}},
+                dispatchEvent: () => {{}},
+                click: () => {{
+                  infoBtnClicks++;
+                  closeBtnVisible = !closeBtnVisible;
+                }},
+                getBoundingClientRect: () => ({{ left: 10, top: 10, width: 24, height: 24 }})
+              }};
+            }}
+            return null;
+          }},
+          querySelectorAll() {{ return []; }}
+        }};
+
+        load({dom_file});
+        const dom = window.WPhotoDomCaption;
+
+        (async () => {{
+          // 1. Hidden Close Info button (offsetParent: null) must NOT report panel as open
+          if (dom.isInfoPanelOpen() !== false) {{
+            throw new Error("Hidden Close info button should not make isInfoPanelOpen() return true");
+          }}
+
+          // 2. Remembered panel in sessionStorage waits for natural hydration (+400ms) without clicking Info button
+          const resHydrate = await dom.ensureInfoPanelOpen();
+          if (!resHydrate.ok || infoBtnClicks !== 0) {{
+            throw new Error("Expected remembered panel to hydrate without clicking Info button, clicks=" + infoBtnClicks);
+          }}
+
+          // 3. forceToggleIfNoTextarea=true forces a click when textarea is missing despite Close info being visible
+          const resForce = await dom.ensureInfoPanelOpen({{ forceToggleIfNoTextarea: true }});
+          if (infoBtnClicks === 0) {{
+            throw new Error("Expected forceToggleIfNoTextarea to click Info button when textarea is missing");
+          }}
+
+          print("DOM_03_OK");
+        }})();
+        """
+        assert "DOM_03_OK" in run_jsc(js)
+
+    runner.run_test(
+        "DOM-03",
+        "Hidden Close-info rejection, remembered-panel hydration grace wait, and forced toggle when textarea missing",
+        dom_03,
+    )
+
     # -------------------------------------------------------------------------
     # Suite 5: Cloud & Local AI Engine + Photo Stack Propagation
     # -------------------------------------------------------------------------
