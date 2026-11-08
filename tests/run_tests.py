@@ -216,16 +216,16 @@ def main():
         if (!r3.includes("Personas identificadas en esta foto: Alice, Bob, más 3 otras personas no identificadas.")) {{
           throw new Error("r3 failed: " + r3);
         }}
-        if (!r3.includes("El lugar identificado es 'Madrid, Spain'.") || !r3.includes("MANTENLO BREVE")) {{
+        if (!r3.includes("El lugar identificado es 'Madrid, Spain'.") || !r3.includes("mantenlo conciso y natural")) {{
           throw new Error("r3 location failed: " + r3);
         }}
 
         // Concise location in EN and FR
         const rEnLoc = ai.buildRules({{ people: [], untaggedCount: 0, location: "Venice, Metropolitan City of Venice, Italy" }}, "en");
-        if (!rEnLoc.includes("KEEP IT SHORT and natural")) throw new Error("EN short location missing");
+        if (!rEnLoc.includes("keep it concise and natural")) throw new Error("EN short location missing");
 
         const rFrLoc = ai.buildRules({{ people: [], untaggedCount: 0, location: "Venice, Metropolitan City of Venice, Italy" }}, "fr");
-        if (!rFrLoc.includes("LOCALISEZ-LE EN FRANÇAIS DE FAÇON COURTE")) throw new Error("FR short location missing");
+        if (!rFrLoc.includes("gardez-le concis et naturel")) throw new Error("FR short location missing");
 
         print("PRM_02_OK");
         """
@@ -248,7 +248,7 @@ def main():
         if (!iNoPeople.includes("Golden Gate Bridge")) throw new Error("iNoPeople failed");
 
         const i1 = ai.buildInstruction({{ people: ["Alice"] }}, "en");
-        if (!i1.includes("START with their names: 'Alice'")) throw new Error("i1 failed");
+        if (!i1.includes("START directly with their names: 'Alice'")) throw new Error("i1 failed");
 
         const i2Fr = ai.buildInstruction({{ people: ["Alice", "Bob"] }}, "fr");
         if (!i2Fr.includes("'Alice et Bob'")) throw new Error("i2Fr failed: " + i2Fr);
