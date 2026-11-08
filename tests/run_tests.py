@@ -1576,6 +1576,23 @@ def main():
             throw new Error("Expected trigger button to mount inside top-bar right action cluster before Create button");
           }}
 
+          // Test bottom-right status bar auto-dismisses when batch process is done
+          window.WPhotoUi.state.activeBatch = {{
+            photoIds: ["P1", "P2"],
+            completedIds: ["P1", "P2"],
+            skippedIds: [],
+            failedIds: [],
+            completedAt: Date.now(),
+            lastReason: null,
+            options: {{ lang: "en" }}
+          }};
+          storageData.activeBatch = window.WPhotoUi.state.activeBatch;
+          window.WPhotoUi.renderStatusBar();
+          await window.WPhotoDomCaption.sleep(10);
+          if (elementsById["wphoto-status-bar"] || storageData.activeBatch) {{
+            throw new Error("Expected bottom-right status bar to auto-dismiss and clear activeBatch after completion");
+          }}
+
           print("UI_01_OK");
         }})();
         """

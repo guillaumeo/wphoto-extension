@@ -5,6 +5,8 @@
   const TRIGGER_BTN_ID = "wphoto-trigger-btn";
   const MENU_CARD_ID = "wphoto-menu-card";
   const STATUS_BAR_ID = "wphoto-status-bar";
+  const STATUS_BAR_AUTO_DISMISS_MS = 4500;
+  let statusAutoDismissTimer = null;
 
   const state = {
     menuOpen: false,
@@ -214,7 +216,16 @@
         state.verbose = data.aiDescriptionVerbose;
       }
       if (data?.activeBatch) {
-        state.activeBatch = data.activeBatch;
+        const b = data.activeBatch;
+        const isTerminal = b.completedAt !== null && b.lastReason !== "paused";
+        if (isTerminal && typeof b.completedAt === "number" && Date.now() - b.completedAt >= STATUS_BAR_AUTO_DISMISS_MS) {
+          state.activeBatch = null;
+          try {
+            chrome.storage.local.remove("activeBatch");
+          } catch (e) {}
+        } else {
+          state.activeBatch = b;
+        }
       }
     } catch (e) {}
   }
@@ -770,6 +781,10 @@
 
   function renderStatusBar() {
     if (typeof document === "undefined") return;
+    if (statusAutoDismissTimer) {
+      clearTimeout(statusAutoDismissTimer);
+      statusAutoDismissTimer = null;
+    }
     const batch = state.activeBatch;
     let bar = document.getElementById(STATUS_BAR_ID);
     if (!batch) {
@@ -838,12 +853,26 @@
       cancelBtn.addEventListener("click", () => window.WPhotoBatchRunner.clearActiveBatch());
       bar.appendChild(cancelBtn);
     } else {
+      if (state.menuOpen) {
+        closeMenu();
+      }
       const closeBtn = document.createElement("button");
       closeBtn.type = "button";
       closeBtn.className = "wphoto-text-btn";
       closeBtn.textContent = t.dismissBtn;
       closeBtn.addEventListener("click", () => window.WPhotoBatchRunner.clearActiveBatch());
       bar.appendChild(closeBtn);
+
+      const ageMs = typeof batch.completedAt === "number" ? Math.max(0, Date.now() - batch.completedAt) : 0;
+      const delayMs = Math.max(500, STATUS_BAR_AUTO_DISMISS_MS - ageMs);
+      statusAutoDismissTimer = setTimeout(() => {
+        statusAutoDismissTimer = null;
+        if (state.activeBatch && state.activeBatch.completedAt !== null && state.activeBatch.lastReason !== "paused") {
+          state.activeBatch = null;
+          window.WPhotoBatchRunner.clearActiveBatch();
+          renderStatusBar();
+        }
+      }, delayMs);
     }
   }
 
