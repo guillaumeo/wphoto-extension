@@ -309,6 +309,7 @@ def main():
 
         let mockCheckboxes = [];
         let mockAlbumLinks = [];
+        let mockScripts = [];
         globalThis.location = {{ pathname: "/u/1/album/ALBUM_123", href: "https://photos.google.com/u/1/album/ALBUM_123" }};
         globalThis.getComputedStyle = () => ({{ overflowY: "visible" }});
         globalThis.document = {{
@@ -317,7 +318,7 @@ def main():
           querySelectorAll(sel) {{
             if (sel.includes('[role="checkbox"][aria-checked="true"]')) return mockCheckboxes;
             if (sel === 'a[href*="/photo/"]') return mockAlbumLinks;
-            if (sel === "script") return [];
+            if (sel === "script") return mockScripts;
             return [];
           }},
           querySelector(sel) {{
@@ -389,7 +390,55 @@ def main():
             throw new Error("Album DOM skippedIds failed: " + JSON.stringify(domRes));
           }}
 
-          // 5. Single photo viewer (/photo/<id>) disables selection (eligible === 0)
+          // 5. Upfront RPC (snAcKc) unowned filtering when ds:7 script is absent (SPA navigation to /album/<id>)
+          sel.clearAll();
+          mockScripts = [
+            {{
+              textContent: '"SNlM0e":"AT_1","FdrFJe":"SID_1","cfb2h":"BL_1","eptZe":"/_/PhotosUi/","S06Grb":"11111222223333344444"'
+            }}
+          ];
+          mockAlbumLinks = [
+            {{ offsetParent: {{}}, getAttribute: (k) => (k === "href" ? "/photo/RPC_DOM_UNOWNED" : "Photo - Jan 4 - Partagé par Marc"), querySelector: () => null, parentElement: {{ querySelectorAll: () => [] }} }}
+          ];
+          globalThis.fetch = async () => ({{
+            ok: true,
+            status: 200,
+            text: async () => {{
+              const inner = JSON.stringify([
+                null,
+                [
+                  // Viewer-owned photo: has ["AF1QipViewerActor0000000001"],[[1],...]
+                  ["RPC_OWNED_1", ["https://lh3.googleusercontent.com/p1", 1600, 1200], 1700000000000, "d1", 0, ["AF1QipViewerActor0000000001"], [[1], "lib1"], {{}}],
+                  // Unowned photo #1: contributor block has null instead of [[1],...]
+                  ["RPC_UNOWNED_1", ["https://lh3.googleusercontent.com/p2", 1600, 1200], 1700000001000, "d2", 0, ["AF1QipOtherActor00000000002"], null, {{}}],
+                  // Unowned photo #2: contributor actor ID differs from viewer's S06Grb actor ID
+                  ["RPC_UNOWNED_2", ["https://lh3.googleusercontent.com/p3", 1600, 1200], 1700000002000, "d3", 0, ["AF1QipOtherActor00000000002"], [[1], "other"], {{}}],
+                  // Unowned photo #3: caught by rendered DOM tile cross-check ("Partagé par Marc")
+                  ["RPC_DOM_UNOWNED", ["https://lh3.googleusercontent.com/p4", 1600, 1200], 1700000003000, "d4", 0, {{}}]
+                ],
+                null,
+                [
+                  "ALBUM_123",
+                  "Shared Trip",
+                  [
+                    ["AF1QipViewerActor0000000001", "11111222223333344444"],
+                    ["AF1QipOtherActor00000000002", "99999888887777766666"]
+                  ]
+                ]
+              ]);
+              return ")}}]'\\n\\n" + JSON.stringify([["wrb.fr", "snAcKc", inner]]);
+            }}
+          }});
+
+          const rpcRes = await sel.enumerateCurrentAlbum();
+          if (JSON.stringify(rpcRes.ids) !== JSON.stringify(["RPC_OWNED_1"])) {{
+            throw new Error("Expected snAcKc RPC enumeration to keep only RPC_OWNED_1, got: " + JSON.stringify(rpcRes));
+          }}
+          if (JSON.stringify(rpcRes.skippedIds) !== JSON.stringify(["RPC_UNOWNED_1", "RPC_UNOWNED_2", "RPC_DOM_UNOWNED"])) {{
+            throw new Error("Expected snAcKc RPC enumeration to skip all 3 unowned photos upfront, got: " + JSON.stringify(rpcRes));
+          }}
+
+          // 6. Single photo viewer (/photo/<id>) disables selection (eligible === 0)
           globalThis.location.pathname = "/photo/SINGLE_PHOTO_1";
           const viewerSum = sel.getSummary();
           if (viewerSum.mode !== "viewer" || viewerSum.eligible !== 0 || sel.getEligibleIds().length !== 0) {{

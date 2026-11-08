@@ -37,6 +37,10 @@
   }
 
   function findTileLink(el) {
+    if (!el) return null;
+    if (typeof el.getAttribute === "function" && (el.getAttribute("href") || "").includes("/photo/")) {
+      return el;
+    }
     let cur = el;
     for (let i = 0; i < 6 && cur; i++) {
       const link = cur.querySelector?.('a[href*="/photo/"]');
@@ -67,14 +71,17 @@
   }
 
   let cachedViewerAccountName = null;
+  const rpcOwnershipCache = new Map();
 
   function resolveViewerAccountName() {
     if (cachedViewerAccountName !== null) return cachedViewerAccountName;
     if (typeof document === "undefined" || typeof document.querySelector !== "function") return null;
-    const accBtn = document.querySelector('a[role="button"][aria-label*="Google Account:"]');
+    const accBtn = document.querySelector(
+      'a[role="button"][aria-label*="Google Account:"], button[aria-label*="Google Account:"], a[role="button"][aria-label*="Compte Google"], button[aria-label*="Compte Google"], a[role="button"][aria-label*="Cuenta de Google"], button[aria-label*="Cuenta de Google"]'
+    );
     if (accBtn) {
       const label = accBtn.getAttribute?.("aria-label") || "";
-      const m = label.match(/Google Account:\s*([^(\n]+)/);
+      const m = label.match(/(?:Google Account|Compte Google|Cuenta de Google)\s*:\s*([^(\n]+)/i);
       const name = m?.[1]?.trim();
       if (name) {
         cachedViewerAccountName = name;
@@ -82,7 +89,7 @@
       }
     }
     if (typeof document.querySelectorAll === "function") {
-      for (const el of Array.from(document.querySelectorAll('a[role="button"][aria-label]'))) {
+      for (const el of Array.from(document.querySelectorAll('a[role="button"][aria-label], button[aria-label]'))) {
         const label = el.getAttribute?.("aria-label") || "";
         if (!/\([^()\s]+@[^()\s]+\)/.test(label)) continue;
         const m = label.match(/:\s*([^(\n]+?)\s*(?:\n|\()/);
@@ -110,19 +117,119 @@
     return null;
   }
 
-  function isOwnedByViewerInScripts(mediaId) {
-    if (!mediaId || typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+  function isSameOwnerName(tileOwner, viewerName) {
+    if (!tileOwner || !viewerName) return true;
+    const a = tileOwner.trim().toLowerCase();
+    const b = viewerName.trim().toLowerCase();
+    if (a === b) return true;
+    if (b.startsWith(a + " ") || a.startsWith(b + " ")) return true;
+    return false;
+  }
+
+  function resolveViewerGaiaId() {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return null;
+    const gaiaRegex = /"S06Grb":"(\d{15,25})"/;
+    for (const script of Array.from(document.querySelectorAll("script"))) {
+      const text = script.textContent || "";
+      const m = gaiaRegex.exec(text);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  function resolveViewerActorId(extraText = "") {
+    const gaiaId = resolveViewerGaiaId();
+    if (!gaiaId) return null;
+    const escapedGaia = gaiaId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pairRegex = new RegExp(`"(AF1Qip[A-Za-z0-9_\\-]{20,})","${escapedGaia}"`);
+    if (extraText) {
+      const m = pairRegex.exec(extraText);
+      if (m) return m[1];
+    }
+    if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+      for (const script of Array.from(document.querySelectorAll("script"))) {
+        const text = script.textContent || "";
+        const m = pairRegex.exec(text);
+        if (m) return m[1];
+      }
+    }
+    return null;
+  }
+
+  function evaluateSliceOwnership(slice, viewerActorId = null) {
+    if (!slice || typeof slice !== "string") return null;
+    const actorMatch = /\["(AF1Qip[A-Za-z0-9_\-]{20,})"\]/.exec(slice);
+    if (!actorMatch) return null;
+    const inViewerLibrary = /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
+    if (!inViewerLibrary) return false;
+    if (viewerActorId && actorMatch[1] !== viewerActorId) return false;
+    return true;
+  }
+
+  function isSnAcKcRowOwnedByViewer(row, viewerActorId = null) {
+    if (!Array.isArray(row) || row.length < 2) return null;
+    try {
+      const rowTail = JSON.stringify(row.slice(1));
+      return evaluateSliceOwnership(rowTail, viewerActorId);
+    } catch (e) {
       return null;
     }
+  }
+
+  function isOwnedByViewerInScripts(mediaId) {
+    if (!mediaId) return null;
+    if (rpcOwnershipCache.has(mediaId)) {
+      return rpcOwnershipCache.get(mediaId);
+    }
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+      return null;
+    }
+    const viewerActorId = resolveViewerActorId();
     const ds7Marker = "AF_initDataCallback({key: 'ds:7'";
-    for (const script of Array.from(document.querySelectorAll("script"))) {
+    const scripts = Array.from(document.querySelectorAll("script"));
+
+    for (const script of scripts) {
       const text = script.textContent || "";
       const ds7Idx = text.indexOf(ds7Marker);
       if (ds7Idx < 0) continue;
       const pos = text.indexOf(`"${mediaId}"`, ds7Idx);
       if (pos < 0) continue;
-      const slice = text.slice(pos, pos + 2500);
-      return /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
+      const slice = text.slice(pos + mediaId.length + 2, pos + 2500);
+      const owned = evaluateSliceOwnership(slice, viewerActorId);
+      if (owned !== null) {
+        rpcOwnershipCache.set(mediaId, owned);
+        return owned;
+      }
+      const fallback = /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
+      rpcOwnershipCache.set(mediaId, fallback);
+      return fallback;
+    }
+
+    for (const script of scripts) {
+      const text = script.textContent || "";
+      if (!text.includes("AF_initDataCallback")) continue;
+      const pos = text.indexOf(`"${mediaId}"`);
+      if (pos < 0) continue;
+      const slice = text.slice(pos + mediaId.length + 2, pos + 2500);
+      const owned = evaluateSliceOwnership(slice, viewerActorId);
+      if (owned !== null) {
+        rpcOwnershipCache.set(mediaId, owned);
+        return owned;
+      }
+    }
+    return null;
+  }
+
+  function findRenderedTileByMediaId(mediaId) {
+    if (!mediaId || typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+      return null;
+    }
+    for (const link of Array.from(document.querySelectorAll('a[href*="/photo/"]'))) {
+      const href = link.getAttribute?.("href") || "";
+      const m = href.match(/\/photo\/([^/?#]+)/);
+      if (m && m[1] === mediaId) {
+        return link;
+      }
     }
     return null;
   }
@@ -131,10 +238,11 @@
     const scriptOwned = isOwnedByViewerInScripts(mediaId);
     if (scriptOwned === false) return true;
     if (scriptOwned === true) return false;
-    if (checkboxOrTile) {
-      const tileOwner = resolveTileOwnerName(checkboxOrTile);
+    const targetEl = checkboxOrTile || findRenderedTileByMediaId(mediaId);
+    if (targetEl) {
+      const tileOwner = resolveTileOwnerName(targetEl);
       const viewerName = resolveViewerAccountName();
-      if (tileOwner && viewerName && tileOwner !== viewerName) {
+      if (tileOwner && viewerName && !isSameOwnerName(tileOwner, viewerName)) {
         return true;
       }
     }
@@ -203,6 +311,12 @@
           classification
         });
         return true;
+      } else {
+        const existing = selectedRegistry.get(id);
+        if (existing && existing.classification === "eligible" && isUnownedSharedItem(id, checkboxEl)) {
+          existing.classification = "skipped_unowned";
+          return true;
+        }
       }
     } else if (selectedRegistry.has(id)) {
       selectedRegistry.delete(id);
@@ -339,15 +453,18 @@
     do {
       const payload = [[["snAcKc", JSON.stringify([albumKey, pageToken, null, null]), null, "generic"]]];
       const body = `f.req=${encodeURIComponent(JSON.stringify(payload))}&at=${encodeURIComponent(at)}&`;
-      const query = new URLSearchParams({
+      const queryParams = {
         rpcids: "snAcKc",
         "source-path": location.pathname,
         "f.sid": sid,
         bl: bl,
         pageId: "none",
         rt: "c"
-      });
-      const url = `https://photos.google.com${path}data/batchexecute?${query.toString()}`;
+      };
+      const queryStr = Object.entries(queryParams)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+        .join("&");
+      const url = `https://photos.google.com${path}data/batchexecute?${queryStr}`;
       const resp = await fetch(url, {
         method: "POST",
         credentials: "include",
@@ -360,15 +477,31 @@
       if (!wrbLine) throw new Error("missing_wrb_envelope");
       const outer = JSON.parse(wrbLine);
       const entry = outer.find((row) => row?.[0] === "wrb.fr");
-      const parsed = JSON.parse(entry?.[2]);
+      const rawInnerJson = entry?.[2] || "";
+      const parsed = JSON.parse(rawInnerJson);
       const rows = Array.isArray(parsed?.[1]) ? parsed[1] : [];
+      const viewerActorId = resolveViewerActorId(rawInnerJson);
 
       for (const row of rows) {
         const mediaKey = row?.[0];
         if (typeof mediaKey !== "string") continue;
         const meta = Array.isArray(row) ? row[row.length - 1] : null;
         const durationMs = meta?.[76647426]?.[0] ?? null;
-        if (durationMs !== null || isOwnedByViewerInScripts(mediaKey) === false) {
+        const rowOwned = isSnAcKcRowOwnedByViewer(row, viewerActorId);
+        if (rowOwned !== null) {
+          rpcOwnershipCache.set(mediaKey, rowOwned);
+        }
+        const scriptOwned = isOwnedByViewerInScripts(mediaKey);
+        const domTile = findRenderedTileByMediaId(mediaKey);
+        const domClassification = domTile
+          ? classifyAriaLabel(domTile.getAttribute?.("aria-label") || "", domTile)
+          : "eligible";
+        if (
+          durationMs !== null ||
+          rowOwned === false ||
+          scriptOwned === false ||
+          domClassification !== "eligible"
+        ) {
           skippedIds.push(mediaKey);
         } else {
           ids.push(mediaKey);
@@ -444,7 +577,7 @@
     }
     try {
       const res = await enumerateAlbumViaRpc(albumKey);
-      if (res.ids.length > 0) return res;
+      if (res.ids.length > 0 || res.skippedIds.length > 0) return res;
     } catch (e) {}
 
     return await enumerateAlbumViaDom();
@@ -452,6 +585,8 @@
 
   function clearAll() {
     selectedRegistry.clear();
+    rpcOwnershipCache.clear();
+    cachedViewerAccountName = null;
     selectionOrderCounter = 0;
     notifyListeners();
   }
