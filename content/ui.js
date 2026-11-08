@@ -15,12 +15,168 @@
     verbose: false,
     apiKey: "",
     showApiKeyPlain: false,
-    apiKeyStatusMsg: "",
+    apiKeyStatusKey: "",
     nanoStatus: "idle", // "idle" | "available" | "downloadable" | "downloading" | "unavailable"
     nanoProgressPct: 0,
     enumeratingAlbum: false,
     activeBatch: null
   };
+
+  const UI_I18N = {
+    en: {
+      menuAriaLabel: "AI Plus Menu",
+      apiKeyBtn: "API Key",
+      apiKeySetBtn: "API Key (Set)",
+      languageLabel: "Language",
+      modelLabel: "Model",
+      modelCloud: "Cloud",
+      modelLocal: "Local",
+      localReady: "Local Gemini Nano model is ready.",
+      localDownloadNeeded: "Local Gemini Nano model requires a one-time download. ",
+      downloadModelBtn: "Download model",
+      localDownloading: (pct) => `Downloading local model (${pct}%)...`,
+      localUnavailable:
+        "Local AI model unavailable on this device; descriptions will use photo metadata (people, place, year).",
+      cloudNeedsKey: "Cloud model requires a Google AI Studio API key. ",
+      setApiKeyBtn: "Set API Key",
+      overwriteLabel: "Overwrite existing descriptions",
+      no: "No",
+      yes: "Yes",
+      verboseLog: "Verbose log",
+      downloadLog: "Download log",
+      readingAlbum: "Reading album...",
+      describeCount: (n) => `Describe ${n} photo${n === 1 ? "" : "s"}`,
+      describeAlbum: "Describe album photos",
+      selectPhotos: "Select photos to start",
+      apiKeyTitle: "Google AI Studio API Key",
+      backBtn: "Back",
+      apiKeyHelperHtml:
+        'Enter your Gemini API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>. Stored locally on this browser only.',
+      currentKey: (masked) => `Current key: ${masked}`,
+      apiKeyInputAria: "Gemini API Key",
+      showBtn: "Show",
+      hideBtn: "Hide",
+      saveKeyBtn: "Save Key",
+      clearBtn: "Clear",
+      keySaved: "Key saved",
+      keyCleared: "Key cleared",
+      keySaveFailed: "Failed to save key",
+      statusRunning: (cur, total, done, skipped) =>
+        `AI Plus: ${cur} / ${total} (${done} done, ${skipped} skipped)`,
+      statusPaused: (processed, total, done, skipped) =>
+        `Paused at ${processed} / ${total} (${done} done, ${skipped} skipped)`,
+      statusFinished: (done, skipped, failed) =>
+        `Finished: ${done} described, ${skipped} skipped, ${failed} failed`,
+      pauseBtn: "Pause",
+      cancelBtn: "Cancel",
+      resumeBtn: "Resume",
+      dismissBtn: "Dismiss"
+    },
+    fr: {
+      menuAriaLabel: "Menu AI Plus",
+      apiKeyBtn: "Clé API",
+      apiKeySetBtn: "Clé API (Active)",
+      languageLabel: "Langue",
+      modelLabel: "Modèle",
+      modelCloud: "Cloud",
+      modelLocal: "Local",
+      localReady: "Le modèle local Gemini Nano est prêt.",
+      localDownloadNeeded: "Le modèle local Gemini Nano nécessite un téléchargement unique. ",
+      downloadModelBtn: "Télécharger le modèle",
+      localDownloading: (pct) => `Téléchargement du modèle local (${pct}%)...`,
+      localUnavailable:
+        "Modèle IA local indisponible sur cet appareil ; les descriptions utiliseront les métadonnées (personnes, lieu, année).",
+      cloudNeedsKey: "Le modèle Cloud nécessite une clé API Google AI Studio. ",
+      setApiKeyBtn: "Configurer la clé API",
+      overwriteLabel: "Remplacer les descriptions existantes",
+      no: "Non",
+      yes: "Oui",
+      verboseLog: "Journal détaillé",
+      downloadLog: "Télécharger le journal",
+      readingAlbum: "Lecture de l'album...",
+      describeCount: (n) => `Décrire ${n} photo${n === 1 ? "" : "s"}`,
+      describeAlbum: "Décrire les photos de l'album",
+      selectPhotos: "Sélectionnez des photos",
+      apiKeyTitle: "Clé API Google AI Studio",
+      backBtn: "Retour",
+      apiKeyHelperHtml:
+        'Saisissez votre clé API Gemini depuis <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>. Stockée uniquement sur ce navigateur.',
+      currentKey: (masked) => `Clé actuelle : ${masked}`,
+      apiKeyInputAria: "Clé API Gemini",
+      showBtn: "Afficher",
+      hideBtn: "Masquer",
+      saveKeyBtn: "Enregistrer",
+      clearBtn: "Effacer",
+      keySaved: "Clé enregistrée",
+      keyCleared: "Clé effacée",
+      keySaveFailed: "Échec de l'enregistrement",
+      statusRunning: (cur, total, done, skipped) =>
+        `AI Plus : ${cur} / ${total} (${done} terminé${done > 1 ? "s" : ""}, ${skipped} ignoré${skipped > 1 ? "s" : ""})`,
+      statusPaused: (processed, total, done, skipped) =>
+        `En pause à ${processed} / ${total} (${done} terminé${done > 1 ? "s" : ""}, ${skipped} ignoré${skipped > 1 ? "s" : ""})`,
+      statusFinished: (done, skipped, failed) =>
+        `Terminé : ${done} décrite${done > 1 ? "s" : ""}, ${skipped} ignorée${skipped > 1 ? "s" : ""}, ${failed} échec${failed > 1 ? "s" : ""}`,
+      pauseBtn: "Pause",
+      cancelBtn: "Annuler",
+      resumeBtn: "Reprendre",
+      dismissBtn: "Fermer"
+    },
+    es: {
+      menuAriaLabel: "Menú AI Plus",
+      apiKeyBtn: "Clave API",
+      apiKeySetBtn: "Clave API (Activa)",
+      languageLabel: "Idioma",
+      modelLabel: "Modelo",
+      modelCloud: "Nube",
+      modelLocal: "Local",
+      localReady: "El modelo local Gemini Nano está listo.",
+      localDownloadNeeded: "El modelo local Gemini Nano requiere una descarga única. ",
+      downloadModelBtn: "Descargar modelo",
+      localDownloading: (pct) => `Descargando modelo local (${pct}%)...`,
+      localUnavailable:
+        "Modelo IA local no disponible en este dispositivo; las descripciones usarán los metadatos (personas, lugar, año).",
+      cloudNeedsKey: "El modelo en la nube requiere una clave API de Google AI Studio. ",
+      setApiKeyBtn: "Configurar clave API",
+      overwriteLabel: "Sobrescribir descripciones existentes",
+      no: "No",
+      yes: "Sí",
+      verboseLog: "Registro detallado",
+      downloadLog: "Descargar registro",
+      readingAlbum: "Leyendo álbum...",
+      describeCount: (n) => `Describir ${n} foto${n === 1 ? "" : "s"}`,
+      describeAlbum: "Describir fotos del álbum",
+      selectPhotos: "Selecciona fotos",
+      apiKeyTitle: "Clave API de Google AI Studio",
+      backBtn: "Volver",
+      apiKeyHelperHtml:
+        'Ingresa tu clave API de Gemini desde <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>. Guardada localmente solo en este navegador.',
+      currentKey: (masked) => `Clave actual: ${masked}`,
+      apiKeyInputAria: "Clave API de Gemini",
+      showBtn: "Mostrar",
+      hideBtn: "Ocultar",
+      saveKeyBtn: "Guardar clave",
+      clearBtn: "Borrar",
+      keySaved: "Clave guardada",
+      keyCleared: "Clave borrada",
+      keySaveFailed: "Error al guardar la clave",
+      statusRunning: (cur, total, done, skipped) =>
+        `AI Plus: ${cur} / ${total} (${done} completada${done === 1 ? "" : "s"}, ${skipped} omitida${skipped === 1 ? "" : "s"})`,
+      statusPaused: (processed, total, done, skipped) =>
+        `En pausa en ${processed} / ${total} (${done} completada${done === 1 ? "" : "s"}, ${skipped} omitida${skipped === 1 ? "" : "s"})`,
+      statusFinished: (done, skipped, failed) =>
+        `Finalizado: ${done} descrita${done === 1 ? "" : "s"}, ${skipped} omitida${skipped === 1 ? "" : "s"}, ${failed} fallida${failed === 1 ? "" : "s"}`,
+      pauseBtn: "Pausar",
+      cancelBtn: "Cancelar",
+      resumeBtn: "Reanudar",
+      dismissBtn: "Cerrar"
+    }
+  };
+
+  function getUiStrings(lang) {
+    const base = UI_I18N[lang] || UI_I18N.en;
+    const customUi = window.WPHOTO_PROMPTS?.[lang]?.ui;
+    return customUi ? { ...base, ...customUi } : base;
+  }
 
   function maskApiKey(key) {
     if (!key || typeof key !== "string") return "";
@@ -75,18 +231,18 @@
       if (cleaned) {
         await chrome.storage.local.set({ geminiApiKey: cleaned });
         state.apiKey = cleaned;
-        state.apiKeyStatusMsg = "Key saved";
+        state.apiKeyStatusKey = "keySaved";
       } else {
         await chrome.storage.local.remove("geminiApiKey");
         state.apiKey = "";
-        state.apiKeyStatusMsg = "Key cleared";
+        state.apiKeyStatusKey = "keyCleared";
       }
     } catch (e) {
-      state.apiKeyStatusMsg = "Failed to save key";
+      state.apiKeyStatusKey = "keySaveFailed";
     }
     renderMenu();
     setTimeout(() => {
-      state.apiKeyStatusMsg = "";
+      state.apiKeyStatusKey = "";
       if (state.menuOpen) renderMenu();
     }, 2500);
   }
@@ -96,36 +252,26 @@
       await chrome.storage.local.remove("geminiApiKey");
     } catch (e) {}
     state.apiKey = "";
-    state.apiKeyStatusMsg = "Key cleared";
+    state.apiKeyStatusKey = "keyCleared";
     renderMenu();
     setTimeout(() => {
-      state.apiKeyStatusMsg = "";
+      state.apiKeyStatusKey = "";
       if (state.menuOpen) renderMenu();
     }, 2500);
   }
 
   function getCtaLabel(lang, summary) {
+    const t = getUiStrings(lang);
     if (state.enumeratingAlbum) {
-      return lang === "fr"
-        ? "Lecture de l'album..."
-        : lang === "es"
-        ? "Leyendo álbum..."
-        : "Reading album...";
+      return t.readingAlbum;
     }
     if (summary.eligible > 0) {
-      const n = summary.eligible;
-      if (lang === "fr") return `Décrire ${n} photo${n === 1 ? "" : "s"}`;
-      if (lang === "es") return `Describir ${n} foto${n === 1 ? "" : "s"}`;
-      return `Describe ${n} photo${n === 1 ? "" : "s"}`;
+      return t.describeCount(summary.eligible);
     }
     if (summary.inAlbum) {
-      if (lang === "fr") return "Décrire les photos de l'album";
-      if (lang === "es") return "Describir fotos del álbum";
-      return "Describe album photos";
+      return t.describeAlbum;
     }
-    if (lang === "fr") return "Sélectionnez des photos";
-    if (lang === "es") return "Selecciona fotos";
-    return "Select photos to start";
+    return t.selectPhotos;
   }
 
   async function triggerLocalProbe() {
@@ -290,14 +436,15 @@
       return;
     }
 
+    const t = getUiStrings(state.lang);
     let card = document.getElementById(MENU_CARD_ID);
     if (!card) {
       card = document.createElement("div");
       card.id = MENU_CARD_ID;
       card.setAttribute("role", "dialog");
-      card.setAttribute("aria-label", "AI Plus Menu");
       document.body.appendChild(card);
     }
+    card.setAttribute("aria-label", t.menuAriaLabel);
     applyThemeAttr(card);
     positionMenuCard(card);
     card.innerHTML = "";
@@ -310,17 +457,18 @@
   }
 
   function renderApiKeyView(card) {
+    const t = getUiStrings(state.lang);
     const header = document.createElement("div");
     header.className = "wphoto-header";
 
     const title = document.createElement("span");
     title.className = "wphoto-title";
-    title.textContent = "Google AI Studio API Key";
+    title.textContent = t.apiKeyTitle;
 
     const backBtn = document.createElement("button");
     backBtn.type = "button";
     backBtn.className = "wphoto-text-btn";
-    backBtn.textContent = "Back";
+    backBtn.textContent = t.backBtn;
     backBtn.addEventListener("click", () => {
       state.view = "main";
       renderMenu();
@@ -332,15 +480,14 @@
 
     const helper = document.createElement("div");
     helper.className = "wphoto-note";
-    helper.innerHTML =
-      'Enter your Gemini API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>. Stored locally on this browser only.';
+    helper.innerHTML = t.apiKeyHelperHtml;
     card.appendChild(helper);
 
     if (state.apiKey) {
       const statusRow = document.createElement("div");
       statusRow.className = "wphoto-field";
       statusRow.style.fontSize = "12px";
-      statusRow.textContent = `Current key: ${maskApiKey(state.apiKey)}`;
+      statusRow.textContent = t.currentKey(maskApiKey(state.apiKey));
       card.appendChild(statusRow);
     }
 
@@ -352,12 +499,12 @@
     input.className = "wphoto-input";
     input.placeholder = "AIzaSy...";
     input.value = state.apiKey;
-    input.setAttribute("aria-label", "Gemini API Key");
+    input.setAttribute("aria-label", t.apiKeyInputAria);
 
     const toggleShowBtn = document.createElement("button");
     toggleShowBtn.type = "button";
     toggleShowBtn.className = "wphoto-text-btn";
-    toggleShowBtn.textContent = state.showApiKeyPlain ? "Hide" : "Show";
+    toggleShowBtn.textContent = state.showApiKeyPlain ? t.hideBtn : t.showBtn;
     toggleShowBtn.addEventListener("click", () => {
       state.showApiKeyPlain = !state.showApiKeyPlain;
       state.apiKey = input.value;
@@ -368,12 +515,12 @@
     inputRow.appendChild(toggleShowBtn);
     card.appendChild(inputRow);
 
-    if (state.apiKeyStatusMsg) {
+    if (state.apiKeyStatusKey && t[state.apiKeyStatusKey]) {
       const msg = document.createElement("div");
       msg.style.fontSize = "12px";
       msg.style.marginBottom = "8px";
       msg.style.color = "var(--wphoto-primary)";
-      msg.textContent = state.apiKeyStatusMsg;
+      msg.textContent = t[state.apiKeyStatusKey];
       card.appendChild(msg);
     }
 
@@ -384,7 +531,7 @@
     saveBtn.type = "button";
     saveBtn.className = "wphoto-primary-btn";
     saveBtn.style.flex = "1";
-    saveBtn.textContent = "Save Key";
+    saveBtn.textContent = t.saveKeyBtn;
     saveBtn.addEventListener("click", () => {
       saveGeminiApiKey(input.value);
     });
@@ -392,7 +539,7 @@
     const clearBtn = document.createElement("button");
     clearBtn.type = "button";
     clearBtn.className = "wphoto-text-btn";
-    clearBtn.textContent = "Clear";
+    clearBtn.textContent = t.clearBtn;
     clearBtn.addEventListener("click", () => {
       input.value = "";
       clearGeminiApiKey();
@@ -422,6 +569,8 @@
   }
 
   function renderMainView(card) {
+    const t = getUiStrings(state.lang);
+
     // Header: Title + API Key button
     const header = document.createElement("div");
     header.className = "wphoto-header";
@@ -433,7 +582,7 @@
     const apiKeyBtn = document.createElement("button");
     apiKeyBtn.type = "button";
     apiKeyBtn.className = "wphoto-text-btn";
-    apiKeyBtn.textContent = state.apiKey ? "API Key (Set)" : "API Key";
+    apiKeyBtn.textContent = state.apiKey ? t.apiKeySetBtn : t.apiKeyBtn;
     apiKeyBtn.addEventListener("click", () => {
       state.view = "apikey";
       renderMenu();
@@ -455,7 +604,7 @@
     langField.setAttribute("data-wphoto-lang-toggle", "true");
     const langLabel = document.createElement("span");
     langLabel.className = "wphoto-label";
-    langLabel.textContent = "Language";
+    langLabel.textContent = t.languageLabel;
     langField.appendChild(langLabel);
     langField.appendChild(
       createSegmentedControl(
@@ -465,8 +614,9 @@
           state.lang = val;
           saveStoredPrefs();
           renderMenu();
+          renderStatusBar();
         },
-        "Language"
+        t.languageLabel
       )
     );
     card.appendChild(langField);
@@ -477,13 +627,13 @@
     modelField.setAttribute("data-wphoto-model-toggle", "true");
     const modelLabel = document.createElement("span");
     modelLabel.className = "wphoto-label";
-    modelLabel.textContent = "Model";
+    modelLabel.textContent = t.modelLabel;
     modelField.appendChild(modelLabel);
     modelField.appendChild(
       createSegmentedControl(
         [
-          { value: "cloud", label: "Cloud" },
-          { value: "local", label: "Local" }
+          { value: "cloud", label: t.modelCloud },
+          { value: "local", label: t.modelLocal }
         ],
         state.model,
         (val) => {
@@ -492,7 +642,7 @@
           if (val === "local") triggerLocalProbe();
           else renderMenu();
         },
-        "Model"
+        t.modelLabel
       )
     );
     card.appendChild(modelField);
@@ -501,30 +651,29 @@
       const localNote = document.createElement("div");
       localNote.className = "wphoto-note";
       if (state.nanoStatus === "available") {
-        localNote.textContent = "Local Gemini Nano model is ready.";
+        localNote.textContent = t.localReady;
       } else if (state.nanoStatus === "downloadable") {
-        localNote.textContent = "Local Gemini Nano model requires a one-time download. ";
+        localNote.textContent = t.localDownloadNeeded;
         const dlBtn = document.createElement("button");
         dlBtn.type = "button";
         dlBtn.className = "wphoto-link-btn";
-        dlBtn.textContent = "Download model";
+        dlBtn.textContent = t.downloadModelBtn;
         dlBtn.addEventListener("click", handleDownloadLocalModel);
         localNote.appendChild(dlBtn);
       } else if (state.nanoStatus === "downloading") {
-        localNote.textContent = `Downloading local model (${state.nanoProgressPct}%)...`;
+        localNote.textContent = t.localDownloading(state.nanoProgressPct);
       } else {
-        localNote.textContent =
-          "Local AI model unavailable on this device; descriptions will use photo metadata (people, place, year).";
+        localNote.textContent = t.localUnavailable;
       }
       card.appendChild(localNote);
     } else if (!state.apiKey) {
       const keyWarning = document.createElement("div");
       keyWarning.className = "wphoto-note";
-      keyWarning.textContent = "Cloud model requires a Google AI Studio API key. ";
+      keyWarning.textContent = t.cloudNeedsKey;
       const setKeyLink = document.createElement("button");
       setKeyLink.type = "button";
       setKeyLink.className = "wphoto-link-btn";
-      setKeyLink.textContent = "Set API Key";
+      setKeyLink.textContent = t.setApiKeyBtn;
       setKeyLink.addEventListener("click", () => {
         state.view = "apikey";
         renderMenu();
@@ -539,13 +688,13 @@
     overwriteField.setAttribute("data-wphoto-overwrite-toggle", "true");
     const overwriteLabel = document.createElement("span");
     overwriteLabel.className = "wphoto-label";
-    overwriteLabel.textContent = "Overwrite existing descriptions";
+    overwriteLabel.textContent = t.overwriteLabel;
     overwriteField.appendChild(overwriteLabel);
     overwriteField.appendChild(
       createSegmentedControl(
         [
-          { value: "no", label: "No" },
-          { value: "yes", label: "Yes" }
+          { value: "no", label: t.no },
+          { value: "yes", label: t.yes }
         ],
         state.overwrite,
         (val) => {
@@ -553,7 +702,7 @@
           saveStoredPrefs();
           renderMenu();
         },
-        "Overwrite existing descriptions"
+        t.overwriteLabel
       )
     );
     card.appendChild(overwriteField);
@@ -579,7 +728,7 @@
       renderMenu();
     });
     const checkSpan = document.createElement("span");
-    checkSpan.textContent = "Verbose log";
+    checkSpan.textContent = t.verboseLog;
     checkLabel.appendChild(checkbox);
     checkLabel.appendChild(checkSpan);
     verboseRow.appendChild(checkLabel);
@@ -588,7 +737,7 @@
       const dlLogBtn = document.createElement("button");
       dlLogBtn.type = "button";
       dlLogBtn.className = "wphoto-link-btn";
-      dlLogBtn.textContent = "Download log";
+      dlLogBtn.textContent = t.downloadLog;
       dlLogBtn.addEventListener("click", handleDownloadLog);
       verboseRow.appendChild(dlLogBtn);
     }
@@ -624,6 +773,9 @@
     applyThemeAttr(bar);
     bar.innerHTML = "";
 
+    const activeLang = state.lang || batch.options?.lang || "en";
+    const t = getUiStrings(activeLang);
+
     const total = batch.photoIds?.length || 0;
     const done = batch.completedIds?.length || 0;
     const skipped = batch.skippedIds?.length || 0;
@@ -634,11 +786,11 @@
 
     const textSpan = document.createElement("span");
     if (isRunning) {
-      textSpan.textContent = `AI Plus: ${Math.min(processed + 1, total)} / ${total} (${done} done, ${skipped} skipped)`;
+      textSpan.textContent = t.statusRunning(Math.min(processed + 1, total), total, done, skipped);
     } else if (isPaused) {
-      textSpan.textContent = `Paused at ${processed} / ${total} (${done} done, ${skipped} skipped)`;
+      textSpan.textContent = t.statusPaused(processed, total, done, skipped);
     } else {
-      textSpan.textContent = `Finished: ${done} described, ${skipped} skipped, ${failed} failed`;
+      textSpan.textContent = t.statusFinished(done, skipped, failed);
     }
     bar.appendChild(textSpan);
 
@@ -646,35 +798,35 @@
       const pauseBtn = document.createElement("button");
       pauseBtn.type = "button";
       pauseBtn.className = "wphoto-text-btn";
-      pauseBtn.textContent = "Pause";
+      pauseBtn.textContent = t.pauseBtn;
       pauseBtn.addEventListener("click", () => window.WPhotoBatchRunner.pauseBatch());
       bar.appendChild(pauseBtn);
 
       const cancelBtn = document.createElement("button");
       cancelBtn.type = "button";
       cancelBtn.className = "wphoto-text-btn";
-      cancelBtn.textContent = "Cancel";
+      cancelBtn.textContent = t.cancelBtn;
       cancelBtn.addEventListener("click", () => window.WPhotoBatchRunner.cancelBatch());
       bar.appendChild(cancelBtn);
     } else if (isPaused) {
       const resumeBtn = document.createElement("button");
       resumeBtn.type = "button";
       resumeBtn.className = "wphoto-text-btn";
-      resumeBtn.textContent = "Resume";
+      resumeBtn.textContent = t.resumeBtn;
       resumeBtn.addEventListener("click", () => window.WPhotoBatchRunner.resumeBatch());
       bar.appendChild(resumeBtn);
 
       const cancelBtn = document.createElement("button");
       cancelBtn.type = "button";
       cancelBtn.className = "wphoto-text-btn";
-      cancelBtn.textContent = "Cancel";
+      cancelBtn.textContent = t.cancelBtn;
       cancelBtn.addEventListener("click", () => window.WPhotoBatchRunner.clearActiveBatch());
       bar.appendChild(cancelBtn);
     } else {
       const closeBtn = document.createElement("button");
       closeBtn.type = "button";
       closeBtn.className = "wphoto-text-btn";
-      closeBtn.textContent = "Dismiss";
+      closeBtn.textContent = t.dismissBtn;
       closeBtn.addEventListener("click", () => window.WPhotoBatchRunner.clearActiveBatch());
       bar.appendChild(closeBtn);
     }
@@ -1027,6 +1179,7 @@
 
   window.WPhotoUi = {
     state,
+    getUiStrings,
     maskApiKey,
     detectGooglePhotosTheme,
     findSelectionActionContainer,

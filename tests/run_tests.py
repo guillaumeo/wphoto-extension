@@ -1228,6 +1228,39 @@ def main():
             }}
           }}
 
+          // Switch language to French ("Français") and verify all menu buttons & API Key view translate
+          const frBtn = card.querySelectorAll("button").find((b) => b.textContent === "Français");
+          frBtn.click();
+          const frButtons = card.querySelectorAll("button").map((b) => b.textContent);
+          for (const expectedFr of ["Clé API", "Non", "Oui", "Configurer la clé API", "Décrire les photos de l'album"]) {{
+            if (!frButtons.includes(expectedFr)) {{
+              throw new Error("Missing French button '" + expectedFr + "' in: " + JSON.stringify(frButtons));
+            }}
+          }}
+          if (card.getAttribute("aria-label") !== "Menu AI Plus") {{
+            throw new Error("Expected French menu aria-label 'Menu AI Plus'");
+          }}
+
+          // Switch to API Key view in French
+          card.querySelectorAll("button").find((b) => b.textContent === "Clé API").click();
+          const frApiButtons = card.querySelectorAll("button").map((b) => b.textContent);
+          for (const expectedFrApi of ["Retour", "Afficher", "Enregistrer", "Effacer"]) {{
+            if (!frApiButtons.includes(expectedFrApi)) {{
+              throw new Error("Missing French API view button '" + expectedFrApi + "' in: " + JSON.stringify(frApiButtons));
+            }}
+          }}
+          // Return to main view and test Spanish ("Español")
+          card.querySelectorAll("button").find((b) => b.textContent === "Retour").click();
+          card.querySelectorAll("button").find((b) => b.textContent === "Español").click();
+          const esButtons = card.querySelectorAll("button").map((b) => b.textContent);
+          for (const expectedEs of ["Clave API", "Nube", "Local", "No", "Sí", "Configurar clave API", "Describir fotos del álbum"]) {{
+            if (!esButtons.includes(expectedEs)) {{
+              throw new Error("Missing Spanish button '" + expectedEs + "' in: " + JSON.stringify(esButtons));
+            }}
+          }}
+          // Switch back to English
+          card.querySelectorAll("button").find((b) => b.textContent === "English").click();
+
           // Test API Key Settings save & clear
           await window.WPhotoUi.saveGeminiApiKey("  AIzaSyTestKey987654321  ");
           if (storageData.geminiApiKey !== "AIzaSyTestKey987654321") {{
