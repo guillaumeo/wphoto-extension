@@ -1068,6 +1068,206 @@ def main():
         ai_03,
     )
 
+    def ai_04():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.innerWidth = 1280;
+        globalThis.innerHeight = 800;
+        globalThis.performance = {{ now: () => Date.now() }};
+        globalThis.setTimeout = (fn) => {{ Promise.resolve().then(fn); return 1; }};
+        globalThis.clearTimeout = () => {{}};
+
+        // Simulate a Photo Stack where navigating to STACK_ENTRY_1 redirects to Top Pick STACK_TOP_2
+        let currentPhotoId = "STACK_TOP_2";
+        let cdpClicks = [];
+        let fetchUrls = [];
+        let sharedTextarea = {{
+          value: "",
+          offsetParent: {{}},
+          getBoundingClientRect: () => ({{ left: 950, top: 200, width: 280, height: 60 }})
+        }};
+        let insertedTexts = [];
+
+        globalThis.location = {{
+          origin: "https://photos.google.com",
+          get pathname() {{ return "/photo/" + currentPhotoId; }}
+        }};
+
+        globalThis.chrome = {{
+          storage: {{
+            local: {{
+              get: async (k) => (k === "geminiApiKey" ? {{ geminiApiKey: "TEST_KEY_STACK" }} : ({{}})),
+              set: async () => {{}}
+            }}
+          }},
+          runtime: {{
+            sendMessage: (msg, cb) => {{
+              if (msg.type === "BATCH_DISPATCH_CLICK_AT") {{
+                cdpClicks.push({{ x: msg.x, y: msg.y }});
+                // Clicking thumb 1 at x=525, y=725 switches from STACK_TOP_2 back to STACK_ENTRY_1
+                if (msg.x >= 490 && msg.x <= 560 && msg.y >= 690 && msg.y <= 760) {{
+                  currentPhotoId = "STACK_ENTRY_1";
+                }} else {{
+                  globalThis.document.activeElement = sharedTextarea;
+                }}
+              }}
+              if (msg.type === "BATCH_INSERT_TEXT") {{
+                sharedTextarea.value = msg.text;
+                insertedTexts.push({{ photoId: currentPhotoId, text: msg.text }});
+              }}
+              cb({{ ok: true }});
+            }}
+          }}
+        }};
+
+        globalThis.fetch = async (url, init) => {{
+          fetchUrls.push(url);
+          if (url.includes("gemini-3.1-flash-lite:")) {{
+            return {{ ok: false, status: 404, text: async () => "Not Found" }};
+          }}
+          const body = JSON.parse(init.body);
+          if (!body.generationConfig?.thinkingConfig || body.generationConfig.thinkingConfig.thinkingBudget !== 0) {{
+            throw new Error("Expected thinkingBudget=0 in generationConfig");
+          }}
+          return {{
+            ok: true,
+            status: 200,
+            json: async () => ({{
+              candidates: [
+                {{
+                  content: {{
+                    parts: [{{ text: "Panoramique sur la Mayenne et les ponts de Laval." }}]
+                  }}
+                }}
+              ]
+            }})
+          }};
+        }};
+
+        // Bottom filmstrip thumbnails using div[role="button"] + background-image (Strategy 4 geometric discovery)
+        const thumb1 = {{
+          tagName: "DIV",
+          offsetParent: {{}},
+          style: {{ backgroundImage: 'url("https://lh3.googleusercontent.com/t1")' }},
+          getAttribute: (k) => (k === "role" ? "button" : null),
+          getBoundingClientRect: () => ({{ left: 500, top: 700, right: 550, bottom: 750, width: 50, height: 50 }}),
+          querySelector: () => null,
+          contains: () => false
+          // Note: no .click() effect -> requires CDP BATCH_DISPATCH_CLICK_AT fallback!
+        }};
+        const thumb2 = {{
+          tagName: "DIV",
+          offsetParent: {{}},
+          style: {{ backgroundImage: 'url("https://lh3.googleusercontent.com/t2")' }},
+          getAttribute: (k) => (k === "role" ? "button" : (k === "aria-selected" ? (currentPhotoId === "STACK_TOP_2" ? "true" : "false") : null)),
+          getBoundingClientRect: () => ({{ left: 565, top: 700, right: 615, bottom: 750, width: 50, height: 50 }}),
+          querySelector: () => null,
+          contains: () => false
+        }};
+        // Info panel avatar inside <dl> on the right should be excluded by isInsideInfoPanel
+        const infoPanelAvatar = {{
+          tagName: "IMG",
+          offsetParent: {{}},
+          naturalWidth: 48,
+          naturalHeight: 48,
+          getBoundingClientRect: () => ({{ left: 1020, top: 700, right: 1068, bottom: 748, width: 48, height: 48 }}),
+          closest: (sel) => (sel.includes("dl") ? ({{}}) : null),
+          contains: () => false
+        }};
+
+        globalThis.document = {{
+          createElement(tag) {{
+            if (tag === "canvas") {{
+              return {{
+                width: 0,
+                height: 0,
+                getContext: () => ({{ drawImage: () => {{}} }}),
+                toDataURL: () => "data:image/jpeg;base64,FAKEB64"
+              }};
+            }}
+            return {{}};
+          }},
+          querySelector(sel) {{
+            if (sel.includes("Close info")) {{
+              return {{ offsetParent: {{}}, getBoundingClientRect: () => ({{ width: 24, height: 24 }}) }};
+            }}
+            return null;
+          }},
+          querySelectorAll(sel) {{
+            if (sel === "img") {{
+              return [
+                {{ src: "https://lh3.googleusercontent.com/main=w1200-h900", naturalWidth: 1200, naturalHeight: 900, offsetParent: {{}} }},
+                infoPanelAvatar
+              ];
+            }}
+            if (sel.includes("textarea")) {{
+              return [sharedTextarea];
+            }}
+            if (sel.includes('[style*="background-image"]')) {{
+              return [thumb1, thumb2, infoPanelAvatar];
+            }}
+            return [];
+          }}
+        }};
+
+        load({prompts_file});
+        load({dom_file});
+        load({ai_file});
+
+        window.WPhotoDomCaption.extractMetadataWithStabilization = async () => ({{
+          people: [],
+          untaggedCount: 0,
+          location: "Laval, France",
+          year: "2024"
+        }});
+
+        (async () => {{
+          const detected = window.WPhotoAiEngine.findStackThumbs();
+          if (detected.length !== 2) {{
+            throw new Error("Expected geometric findStackThumbs to find 2 bottom-strip thumbs (excluding Info panel), got: " + detected.length);
+          }}
+
+          const res1 = await window.WPhotoAiEngine.runAiDescription({{
+            photoId: "STACK_ENTRY_1",
+            lang: "fr",
+            model: "cloud",
+            overwrite: false,
+            verbose: false
+          }});
+
+          if (!res1.success) {{
+            throw new Error("Expected stack runAiDescription to succeed, got: " + JSON.stringify(res1));
+          }}
+          if (insertedTexts.length !== 2) {{
+            throw new Error("Expected both STACK_TOP_2 and redirected-from STACK_ENTRY_1 to be captioned via forceWrite, got: " + JSON.stringify(insertedTexts));
+          }}
+          if (insertedTexts[0].photoId !== "STACK_TOP_2" || insertedTexts[1].photoId !== "STACK_ENTRY_1") {{
+            throw new Error("Unexpected stack caption order: " + JSON.stringify(insertedTexts));
+          }}
+
+          // Second call should use cached gemini-3.1-flash-lite-preview directly without 404ing on gemini-3.1-flash-lite
+          fetchUrls = [];
+          await window.WPhotoAiEngine.callGeminiCloud({{
+            apiKey: "TEST_KEY_STACK",
+            rules: "",
+            instruction: "Describe.",
+            lang: "fr"
+          }});
+          if (fetchUrls.length !== 1 || !fetchUrls[0].includes("gemini-3.1-flash-lite-preview")) {{
+            throw new Error("Expected cachedWorkingCloudModel to call preview directly in 1 request, got: " + JSON.stringify(fetchUrls));
+          }}
+
+          print("AI_04_OK");
+        }})();
+        """
+        assert "AI_04_OK" in run_jsc(js)
+
+    runner.run_test(
+        "AI-04",
+        "Photo stack Top-Pick redirect, geometric strip detection, CDP click fallback, forceWrite, and model caching",
+        ai_04,
+    )
+
     # -------------------------------------------------------------------------
     # Suite 6: Batch Runner & Single-Menu UI (API Key Only Settings, No Icons)
     # -------------------------------------------------------------------------

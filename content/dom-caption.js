@@ -141,21 +141,6 @@
 
   function findVisibleDescriptionTextarea() {
     if (typeof document === "undefined") return null;
-    const directSelectors = [
-      'textarea[aria-label="Description"]',
-      'textarea[aria-label="Add a description"]',
-      'textarea[aria-label="Ajouter une description"]',
-      'textarea[aria-label="Ajoutez une description"]',
-      'textarea[aria-label="Añadir una descripción"]',
-      'textarea[aria-label="Agregar una descripción"]',
-      `textarea[jsname="${DESCRIPTION_JSNAME}"]`
-    ];
-    const direct = Array.from(document.querySelectorAll(directSelectors.join(", ")));
-    for (const ta of direct) {
-      const rect = ta.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) return ta;
-    }
-
     const placeholderSelectors = [
       '[aria-label="Add a description"]',
       '[aria-label="Ajouter une description"]',
@@ -167,13 +152,35 @@
     ];
     const placeholders = Array.from(document.querySelectorAll(placeholderSelectors.join(", ")));
     for (const ph of placeholders) {
-      if (ph.tagName === "TEXTAREA") {
-        const rect = ph.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) return ph;
-      } else if (ph.offsetParent !== null) {
+      if (ph.tagName !== "TEXTAREA" && ph.offsetParent !== null) {
         try {
           ph.click();
         } catch (e) {}
+      }
+    }
+
+    const directSelectors = [
+      'textarea[aria-label="Description"]',
+      'textarea[aria-label="Add a description"]',
+      'textarea[aria-label="Ajouter une description"]',
+      'textarea[aria-label="Ajoutez une description"]',
+      'textarea[aria-label="Añadir una descripción"]',
+      'textarea[aria-label="Agregar una descripción"]',
+      `textarea[jsname="${DESCRIPTION_JSNAME}"]`
+    ];
+    const direct = Array.from(document.querySelectorAll(directSelectors.join(", "))).filter((ta) => {
+      if (ta.offsetParent === null) return false;
+      const rect = ta.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    if (direct.length > 0) {
+      return direct[direct.length - 1];
+    }
+
+    for (const ph of placeholders) {
+      if (ph.tagName === "TEXTAREA" && ph.offsetParent !== null) {
+        const rect = ph.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) return ph;
       }
     }
     return null;
@@ -199,22 +206,29 @@
   function triggerDirectDomClick(btn) {
     if (!btn) return false;
     try {
-      for (const evtName of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
-        const EventCtor = window.PointerEvent || window.MouseEvent || Event;
-        const evt = new EventCtor(evtName, {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          view: window,
-          button: 0
-        });
-        btn.dispatchEvent(evt);
+      const EventCtor =
+        (typeof window !== "undefined" && (window.PointerEvent || window.MouseEvent)) ||
+        (typeof Event !== "undefined" ? Event : null);
+      if (EventCtor && typeof btn.dispatchEvent === "function") {
+        for (const evtName of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
+          const evt = new EventCtor(evtName, {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            view: typeof window !== "undefined" ? window : undefined,
+            button: 0
+          });
+          btn.dispatchEvent(evt);
+        }
       }
-      if (typeof btn.click === "function") btn.click();
-      return true;
-    } catch (e) {
-      return false;
-    }
+    } catch (e) {}
+    try {
+      if (typeof btn.click === "function") {
+        btn.click();
+        return true;
+      }
+    } catch (e) {}
+    return false;
   }
 
   async function ensureInfoPanelOpen({ forceToggleIfNoTextarea = false } = {}) {
@@ -453,7 +467,7 @@
     return prev;
   }
 
-  async function runCaption({ text, overwrite = false }) {
+  async function runCaption({ text, overwrite = false, forceWrite = false }) {
     const t0 = performance.now();
     const timing = {
       panelOpenMs: -1,
@@ -517,7 +531,7 @@
     }
 
     const targetText = String(text || "").replace(/\s+$/, "").slice(0, CAPTION_MAX_LENGTH);
-    if (currentVal === targetText) {
+    if (!forceWrite && currentVal === targetText) {
       timing.focusToInsertMs = 0;
       timing.blurToSettleMs = 0;
       return finish(true);
@@ -672,6 +686,7 @@
     sleep,
     waitFor,
     sendToBackground,
+    triggerDirectDomClick,
     isPhotoNotFoundPage,
     isInfoPanelReadOnlyUnowned,
     isInfoPanelOpen,

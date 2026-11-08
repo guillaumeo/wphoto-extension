@@ -257,6 +257,54 @@
     return baseDelay;
   }
 
+  let cachedWorkingCloudModel = null;
+  let thinkingConfigSupported = true;
+
+  async function fetchWithTimeout(url, init, timeoutMs) {
+    if (typeof AbortController !== "function" || !timeoutMs) {
+      return fetch(url, init);
+    }
+    const ctrl = new AbortController();
+    const parentSignal = init?.signal;
+    const onParentAbort = () => ctrl.abort();
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        ctrl.abort();
+      } else {
+        parentSignal.addEventListener("abort", onParentAbort, { once: true });
+      }
+    }
+    const tStart = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const timer = setTimeout(() => {
+      const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - tStart;
+      if (elapsed >= timeoutMs * 0.5) {
+        ctrl.abort();
+      }
+    }, timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+      if (parentSignal) {
+        try {
+          parentSignal.removeEventListener("abort", onParentAbort);
+        } catch (e) {}
+      }
+    }
+  }
+
+  function toSizedGooglePhotosUrl(src) {
+    if (!src || typeof src !== "string") return src;
+    if (!src.includes("googleusercontent.com/")) return src;
+    if (/=w\d+-h\d+[^/]*$/.test(src)) {
+      return src.replace(/=w\d+-h\d+[^/]*$/, "=w768-h768");
+    }
+    if (/=s\d+[^/]*$/.test(src)) {
+      return src.replace(/=s\d+[^/]*$/, "=w768-h768");
+    }
+    return src;
+  }
+
   async function callGeminiCloud({
     apiKey,
     model = "gemini-3.1-flash-lite",
@@ -308,9 +356,13 @@
 
       if (!b64 && typeof fetch === "function" && typeof createImageBitmap === "function") {
         try {
-          let imgResp = await fetch(imgSrc, { credentials: "include" }).catch(() => null);
+          const sizedUrl = toSizedGooglePhotosUrl(imgSrc);
+          let imgResp = await fetchWithTimeout(sizedUrl, { credentials: "omit" }, 6000).catch(() => null);
+          if ((!imgResp || !imgResp.ok) && sizedUrl !== imgSrc) {
+            imgResp = await fetchWithTimeout(imgSrc, { credentials: "omit" }, 6000).catch(() => null);
+          }
           if (!imgResp || !imgResp.ok) {
-            imgResp = await fetch(imgSrc, { credentials: "omit" }).catch(() => null);
+            imgResp = await fetchWithTimeout(imgSrc, { credentials: "include" }, 6000).catch(() => null);
           }
           if (imgResp && imgResp.ok) {
             const blob = await imgResp.blob();
@@ -352,19 +404,26 @@
       }
     }
 
-    const reqInit = {
+    const buildReqInit = (useThinkingConfig) => ({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       ...(abortController ? { signal: abortController.signal } : {}),
       body: JSON.stringify({
         contents: [{ parts }],
         ...(sysInst ? { system_instruction: sysInst } : {}),
-        generationConfig: { temperature: 0.2, maxOutputTokens: 500 }
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 250,
+          ...(useThinkingConfig ? { thinkingConfig: { thinkingBudget: 0 } } : {})
+        }
       })
-    };
+    });
 
     try {
-      let activeModel = model;
+      let activeModel =
+        model === "gemini-3.1-flash-lite" && cachedWorkingCloudModel
+          ? cachedWorkingCloudModel
+          : model;
       let resp = null;
       let retries429 = 0;
       const maxRetries429 = Array.isArray(retryDelaysMs) && retryDelaysMs.length > 0
@@ -375,10 +434,26 @@
         if (isAborted()) {
           return { error: "batch_aborted", retries429 };
         }
-        resp = await fetch(buildUrl(activeModel), reqInit);
+        resp = await fetchWithTimeout(
+          buildUrl(activeModel),
+          buildReqInit(thinkingConfigSupported),
+          15000
+        );
         if (resp.status === 404 && activeModel === "gemini-3.1-flash-lite") {
           activeModel = "gemini-3.1-flash-lite-preview";
-          resp = await fetch(buildUrl(activeModel), reqInit);
+          cachedWorkingCloudModel = activeModel;
+          resp = await fetchWithTimeout(
+            buildUrl(activeModel),
+            buildReqInit(thinkingConfigSupported),
+            15000
+          );
+        }
+        if (resp.status === 400 && thinkingConfigSupported) {
+          thinkingConfigSupported = false;
+          resp = await fetchWithTimeout(buildUrl(activeModel), buildReqInit(false), 15000);
+        }
+        if (resp.ok && activeModel === "gemini-3.1-flash-lite-preview") {
+          cachedWorkingCloudModel = activeModel;
         }
         if (resp.status === 429 && attempt < maxRetries429) {
           retries429++;
@@ -495,6 +570,219 @@
     return res?.status === "available" ? "available" : "unavailable";
   }
 
+  function parseCurrentPhotoId() {
+    if (typeof location === "undefined" || typeof location.pathname !== "string") return null;
+    const m = location.pathname.match(/\/photo\/([^/?#]+)/);
+    return m ? m[1] : null;
+  }
+
+  function isInsideInfoPanel(el) {
+    if (!el || typeof el.closest !== "function") return false;
+    if (
+      el.closest(
+        'dl, [aria-label="Info" i], [aria-label="Informations" i], [aria-label="Información" i]'
+      )
+    ) {
+      return true;
+    }
+    if (typeof document !== "undefined" && typeof el.getBoundingClientRect === "function") {
+      const dl = document.querySelector("dl");
+      if (dl && dl.offsetParent !== null && typeof dl.getBoundingClientRect === "function") {
+        const dlRect = dl.getBoundingClientRect();
+        const winW = typeof window !== "undefined" ? window.innerWidth || 1280 : 1280;
+        if (dlRect.width > 0 && dlRect.left > winW * 0.45) {
+          const r = el.getBoundingClientRect();
+          if (r && r.left >= dlRect.left - 16) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function hasThumbVisual(el) {
+    if (!el) return false;
+    if (el.tagName === "IMG") return true;
+    if (typeof el.querySelector === "function") {
+      if (el.querySelector("img")) return true;
+      if (el.querySelector('[style*="background-image"]')) return true;
+    }
+    if (el.style && typeof el.style.backgroundImage === "string" && el.style.backgroundImage.includes("url(")) {
+      return true;
+    }
+    const p = el.parentElement;
+    if (p && typeof p.querySelector === "function") {
+      const pRect = typeof p.getBoundingClientRect === "function" ? p.getBoundingClientRect() : null;
+      if (!pRect || (pRect.width <= 165 && pRect.height <= 165)) {
+        if (p.querySelector("img") || p.querySelector('[style*="background-image"]')) return true;
+      }
+    }
+    if (typeof getComputedStyle === "function" && el instanceof Element) {
+      try {
+        const bg = getComputedStyle(el).backgroundImage;
+        if (bg && bg.startsWith("url(")) return true;
+      } catch (e) {}
+    }
+    return false;
+  }
+
+  function wakeViewerControls() {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    try {
+      const winW = window.innerWidth || 1280;
+      const winH = window.innerHeight || 800;
+      const targets = [
+        ...Array.from(document.querySelectorAll("img")).filter((el) => el.naturalWidth > 200),
+        document.body
+      ].filter(Boolean);
+      for (const t of targets.slice(0, 3)) {
+        for (const type of ["mouseenter", "mouseover", "pointermove", "mousemove"]) {
+          const Ctor = type.startsWith("pointer")
+            ? window.PointerEvent || window.MouseEvent || (typeof Event !== "undefined" ? Event : null)
+            : window.MouseEvent || (typeof Event !== "undefined" ? Event : null);
+          if (Ctor && typeof t.dispatchEvent === "function") {
+            t.dispatchEvent(
+              new Ctor(type, {
+                bubbles: true,
+                cancelable: true,
+                clientX: Math.round(winW * 0.4),
+                clientY: Math.round(winH * 0.85)
+              })
+            );
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  function findStackThumbs() {
+    if (typeof document === "undefined") return [];
+
+    // Strategy 1: Explicit button / role selectors (includes unit-test compatible selector)
+    const explicitCandidates = Array.from(
+      document.querySelectorAll(
+        'button[aria-label*="Photo "], button[aria-label*="photo "], [role="button"][data-stack-item], button[data-photo-id], [role="listitem"] button'
+      )
+    );
+    let thumbs = explicitCandidates.filter(
+      (el) =>
+        el.offsetParent !== null &&
+        hasThumbVisual(el) &&
+        !isInsideInfoPanel(el) &&
+        (el.getBoundingClientRect?.().height ?? 80) < 160
+    );
+    if (thumbs.length > 1) return thumbs;
+
+    // Strategy 2: Expanded role/aria selectors across EN/FR/ES
+    const roleCandidates = Array.from(
+      document.querySelectorAll(
+        '[role="button"][aria-label*="Photo " i], [role="option"][aria-label*="Photo " i], [role="tab"][aria-label*="Photo " i], ' +
+          'button[aria-label*="Foto " i], [role="button"][aria-label*="Foto " i], [role="option"][aria-label*="Foto " i], [role="tab"][aria-label*="Foto " i], ' +
+          '[aria-label*="Top pick" i], [aria-label*="Meilleure photo" i], [aria-label*="Mejor foto" i], [aria-label*="Mejor toma" i], ' +
+          '[data-stack-item], [data-photo-id], [role="listitem"] [role="button"], [role="option"], [role="tab"]'
+      )
+    );
+    thumbs = roleCandidates.filter((el) => {
+      if (el.offsetParent === null || !hasThumbVisual(el) || isInsideInfoPanel(el)) return false;
+      const r = el.getBoundingClientRect?.();
+      return !r || ((r.height === undefined || (r.height >= 20 && r.height < 160)) && (r.width === undefined || r.width < 160));
+    });
+    if (thumbs.length > 1) return thumbs;
+
+    // Strategy 3: Strip container selectors
+    const strips = Array.from(
+      document.querySelectorAll(
+        '[role="region"][aria-label*="Photos in stack"], [aria-label*="stack" i], [aria-label*="pile" i], [aria-label*="pila" i], [jsname="bCqjTe"], [data-filmstrip], [role="listbox"], [role="tablist"]'
+      )
+    ).filter((s) => !isInsideInfoPanel(s));
+    for (const strip of strips) {
+      const stripItems = Array.from(
+        strip.querySelectorAll('button, [role="button"], [role="option"], [role="tab"], [role="listitem"], a, [jsaction], [tabindex]')
+      ).filter(
+        (el) =>
+          el.offsetParent !== null &&
+          hasThumbVisual(el) &&
+          (el.getBoundingClientRect?.().height ?? 80) < 160
+      );
+      if (stripItems.length > 1) return stripItems;
+    }
+
+    // Strategy 4: Geometric bottom-filmstrip row discovery (language & class agnostic)
+    const winH = typeof window !== "undefined" ? window.innerHeight || 800 : 800;
+    const rawVisuals = Array.from(
+      document.querySelectorAll('img, [style*="background-image"], button, [role="button"], [role="option"], [role="tab"]')
+    ).filter((el) => {
+      if (el.offsetParent === null || isInsideInfoPanel(el) || !hasThumbVisual(el)) return false;
+      const r = el.getBoundingClientRect?.();
+      if (!r || typeof r.top !== "number") return false;
+      return (
+        r.width >= 22 &&
+        r.width <= 150 &&
+        r.height >= 22 &&
+        r.height <= 150 &&
+        r.top >= winH * 0.55 &&
+        r.bottom <= winH + 12
+      );
+    });
+
+    if (rawVisuals.length > 1) {
+      const items = [];
+      for (const vis of rawVisuals) {
+        let best = vis;
+        let cur = vis;
+        for (let d = 0; d < 4 && cur && cur.parentElement; d++, cur = cur.parentElement) {
+          const r = cur.getBoundingClientRect?.();
+          if (!r || r.width > 165 || r.height > 165 || r.width < 20 || r.height < 20) break;
+          const role = cur.getAttribute?.("role");
+          if (
+            cur.tagName === "BUTTON" ||
+            cur.tagName === "A" ||
+            role === "button" ||
+            role === "option" ||
+            role === "tab" ||
+            role === "listitem" ||
+            cur.hasAttribute?.("jsaction") ||
+            cur.hasAttribute?.("tabindex")
+          ) {
+            best = cur;
+          }
+        }
+        if (!items.some((existing) => existing === best || existing.contains?.(best) || best.contains?.(existing))) {
+          items.push(best);
+        }
+      }
+
+      // Find a horizontal row of >= 2 items at the same vertical center
+      for (const base of items) {
+        const br = base.getBoundingClientRect();
+        const bcy = br.top + br.height / 2;
+        const row = items
+          .filter((other) => {
+            const or = other.getBoundingClientRect();
+            const ocy = or.top + or.height / 2;
+            return Math.abs(bcy - ocy) <= 18;
+          })
+          .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+        // Deduplicate items with virtually identical horizontal position
+        const distinctRow = [];
+        for (const item of row) {
+          const ir = item.getBoundingClientRect();
+          if (
+            distinctRow.length === 0 ||
+            Math.abs(ir.left - distinctRow[distinctRow.length - 1].getBoundingClientRect().left) >= 16
+          ) {
+            distinctRow.push(item);
+          }
+        }
+        if (distinctRow.length > 1) {
+          return distinctRow;
+        }
+      }
+    }
+
+    return thumbs;
+  }
+
   function findMainPhotoImage() {
     if (typeof document === "undefined") return null;
     const imgs = Array.from(document.querySelectorAll("img"))
@@ -577,6 +865,7 @@
     }
 
     // Ensure the main viewer image has mounted/hydrated before checking or toggling the Info panel
+    const entryUrlPhotoId = parseCurrentPhotoId();
     let photoImg = findMainPhotoImage();
     const preHydrateStart = performance.now();
     while (!photoImg && performance.now() - preHydrateStart < 3500) {
@@ -598,9 +887,16 @@
       }
     }
 
+    // If Google Photos redirected a Photo Stack URL to its Top Pick during load, give the viewer a brief settle
+    if (parseCurrentPhotoId() && entryUrlPhotoId && parseCurrentPhotoId() !== entryUrlPhotoId) {
+      await dom.sleep(300);
+      photoImg = findMainPhotoImage() || photoImg;
+    }
+    const prePanelUrlPhotoId = parseCurrentPhotoId();
+
     logStep("panel_open_start");
     const panelStart = performance.now();
-    const panelRes = await dom.ensureInfoPanelOpen();
+    let panelRes = await dom.ensureInfoPanelOpen();
     if (!panelRes.ok) {
       logStep("panel_open_failed", `${panelRes.error} (${panelRes.detail})`);
       if (panelRes.error === "info_button_not_found" && !photoImg) {
@@ -628,7 +924,15 @@
 
     logStep("metadata_fetch_start");
     const metaStart = performance.now();
-    const metadata = await dom.extractMetadataWithStabilization();
+    let metadata = await dom.extractMetadataWithStabilization();
+
+    // If Google Photos redirected the stack URL while opening the panel or fetching metadata, re-verify panel & metadata
+    if (parseCurrentPhotoId() && prePanelUrlPhotoId && parseCurrentPhotoId() !== prePanelUrlPhotoId) {
+      logStep("stack_redirect_settled", `${prePanelUrlPhotoId} -> ${parseCurrentPhotoId()}`);
+      await dom.ensureInfoPanelOpen();
+      metadata = await dom.extractMetadataWithStabilization();
+    }
+
     timing.metadataMs = Math.round(performance.now() - metaStart);
     timing.peopleCount = metadata.people.length;
     timing.hadLocation = metadata.location !== null;
@@ -649,8 +953,9 @@
       }
     }
 
+    // Always refresh photoImg right before generation so stack Top Pick redirects never leave a stale image URL
+    photoImg = findMainPhotoImage() || photoImg;
     if (!photoImg) {
-      photoImg = findMainPhotoImage();
       const imgWaitStart = performance.now();
       while (!photoImg && performance.now() - imgWaitStart < 2500) {
         await dom.sleep(150);
@@ -658,6 +963,8 @@
       }
     }
     logStep("image_found", photoImg ? "ready" : "not_found");
+    wakeViewerControls();
+    const preGenStackCount = findStackThumbs().length;
 
     const lang = options.lang || "en";
     const rulesText = buildRules(metadata, lang);
@@ -759,32 +1066,43 @@
 
     // Photo stack propagation: apply the same description to all other photos in the stack
     const extraStackPhotoIds = [];
+    const primaryTaggedId = parseCurrentPhotoId() || options.photoId;
+    if (primaryTaggedId && options.photoId && primaryTaggedId !== options.photoId) {
+      extraStackPhotoIds.push(primaryTaggedId);
+    }
+    const visitedStackIds = new Set([primaryTaggedId].filter(Boolean));
+
     try {
-      const findStackThumbs = () => {
-        if (typeof document === "undefined") return [];
-        const candidates = Array.from(
-          document.querySelectorAll(
-            'button[aria-label*="Photo "], button[aria-label*="photo "], [role="button"][data-stack-item], button[data-photo-id], [role="listitem"] button'
-          )
-        );
-        let thumbs = candidates.filter(
-          (el) => el.offsetParent !== null && el.querySelector("img") && el.getBoundingClientRect().height < 160
-        );
-        if (thumbs.length === 0) {
-          const strip = document.querySelector(
-            '[role="region"][aria-label*="Photos in stack"], [aria-label*="stack" i], [jsname="bCqjTe"], [data-filmstrip]'
-          );
-          if (strip) {
-            thumbs = Array.from(strip.querySelectorAll('button, [role="button"]')).filter(
-              (el) => el.offsetParent !== null && el.querySelector("img")
-            );
+      const isThumbExplicitlySelected = (el) => {
+        let cur = el;
+        for (let d = 0; d < 3 && cur; d++, cur = cur.parentElement) {
+          if (
+            cur.getAttribute?.("aria-selected") === "true" ||
+            cur.getAttribute?.("aria-current") === "true" ||
+            cur.getAttribute?.("aria-pressed") === "true"
+          ) {
+            return true;
           }
         }
-        return thumbs;
+        return false;
       };
 
-      const stackThumbs = findStackThumbs();
+      wakeViewerControls();
+      let stackThumbs = findStackThumbs();
+      if (stackThumbs.length <= 1 && preGenStackCount > 1) {
+        await dom.waitFor(
+          () => {
+            wakeViewerControls();
+            stackThumbs = findStackThumbs();
+            return stackThumbs.length > 1 ? stackThumbs : null;
+          },
+          700,
+          100
+        );
+      }
+
       if (stackThumbs.length > 1) {
+        logStep("stack_detected", `count=${stackThumbs.length} primary=${primaryTaggedId}`);
         for (let idx = 0; idx < stackThumbs.length; idx++) {
           if (
             typeof window !== "undefined" &&
@@ -793,30 +1111,105 @@
           ) {
             break;
           }
+          wakeViewerControls();
           const curThumbs = findStackThumbs();
           const targetThumb =
             curThumbs[idx] ||
-            curThumbs.find((t) => t.getAttribute("aria-label") === stackThumbs[idx].getAttribute("aria-label"));
+            curThumbs.find(
+              (t) =>
+                t.getAttribute?.("aria-label") &&
+                t.getAttribute?.("aria-label") === stackThumbs[idx].getAttribute?.("aria-label")
+            ) ||
+            stackThumbs[idx];
           if (!targetThumb) continue;
-          const isSelected =
-            targetThumb.getAttribute("aria-selected") === "true" ||
-            targetThumb.getAttribute("aria-current") === "true";
-          if (isSelected) continue;
-          targetThumb.click();
-          await dom.sleep(300);
-          const subPhotoId =
-            (typeof location !== "undefined" && location.pathname.match(/\/photo\/([^/?#]+)/)?.[1]) || null;
-          if (subPhotoId && subPhotoId !== options.photoId && !extraStackPhotoIds.includes(subPhotoId)) {
-            extraStackPhotoIds.push(subPhotoId);
+          if (isThumbExplicitlySelected(targetThumb)) continue;
+
+          const beforeId = parseCurrentPhotoId();
+          const beforeTa = dom.findVisibleDescriptionTextarea();
+
+          if (dom.triggerDirectDomClick) {
+            dom.triggerDirectDomClick(targetThumb);
+          } else if (typeof targetThumb.click === "function") {
+            targetThumb.click();
           }
+          const innerClickable = targetThumb.querySelector?.('button, [role="button"], a, img');
+          if (innerClickable && innerClickable !== targetThumb) {
+            try {
+              innerClickable.click?.();
+            } catch (e) {}
+          }
+
+          await dom.sleep(300);
+          let subPhotoId = parseCurrentPhotoId();
+
+          // If DOM click did not switch the stack item, dispatch a hardware CDP click at the thumbnail center
+          if (
+            subPhotoId === beforeId &&
+            !isThumbExplicitlySelected(targetThumb) &&
+            typeof targetThumb.getBoundingClientRect === "function"
+          ) {
+            const r = targetThumb.getBoundingClientRect();
+            if (r && r.width > 0 && r.height > 0 && typeof r.left === "number" && typeof r.top === "number") {
+              await dom.sendToBackground({
+                type: "BATCH_DISPATCH_CLICK_AT",
+                x: Math.round(r.left + r.width / 2),
+                y: Math.round(r.top + r.height / 2)
+              });
+              await dom.waitFor(
+                () => {
+                  const cid = parseCurrentPhotoId();
+                  return (cid && cid !== beforeId) || isThumbExplicitlySelected(targetThumb);
+                },
+                700,
+                80
+              );
+              subPhotoId = parseCurrentPhotoId();
+            }
+          }
+
+          if (subPhotoId === beforeId && !isThumbExplicitlySelected(targetThumb)) {
+            continue;
+          }
+          if (subPhotoId && visitedStackIds.has(subPhotoId)) {
+            continue;
+          }
+          if (subPhotoId) {
+            visitedStackIds.add(subPhotoId);
+            if (subPhotoId !== options.photoId && !extraStackPhotoIds.includes(subPhotoId)) {
+              extraStackPhotoIds.push(subPhotoId);
+            }
+          }
+
+          logStep("stack_sub_start", `idx=${idx + 1}/${stackThumbs.length} id=${subPhotoId || "unknown"}`);
+
+          // Wait briefly for the Info panel textarea to update for the newly selected stack item
+          if (beforeTa) {
+            await dom.waitFor(
+              () => {
+                const curTa = dom.findVisibleDescriptionTextarea();
+                return !curTa || curTa !== beforeTa || (curTa.value || "").trim() !== finalCaption.trim();
+              },
+              600,
+              80
+            );
+          }
+
           await dom.ensureInfoPanelOpen();
           const subTa = dom.findVisibleDescriptionTextarea();
-          const hasExisting = subTa && typeof subTa.value === "string" && subTa.value.trim().length > 0;
-          if (shouldOverwrite || !hasExisting) {
-            await dom.runCaption({
+          const subVal = subTa && typeof subTa.value === "string" ? subTa.value.trim() : "";
+          const hasDifferentExisting = subVal.length > 0 && subVal !== finalCaption.trim();
+          if (shouldOverwrite || !hasDifferentExisting) {
+            const subCapRes = await dom.runCaption({
               text: finalCaption,
-              overwrite: shouldOverwrite
+              overwrite: true,
+              forceWrite: true
             });
+            logStep(
+              "stack_sub_done",
+              `idx=${idx + 1}/${stackThumbs.length} id=${subPhotoId || "unknown"} ok=${subCapRes.success}`
+            );
+          } else {
+            logStep("stack_sub_skipped_existing", `idx=${idx + 1}/${stackThumbs.length} id=${subPhotoId || "unknown"}`);
           }
           await dom.sleep(200);
         }
@@ -847,6 +1240,7 @@
     probeNanoAvailability,
     downloadNanoModel,
     runAiDescription,
+    findStackThumbs,
     clearAiDescLog,
     getAiDescLog,
     appendAiDescLog
