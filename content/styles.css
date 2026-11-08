@@ -1,0 +1,265 @@
+/* Native Google Photos Material UI Styles for AI Description Extension */
+/* Clean text buttons only — no icons, no animations, no decorative effects. */
+
+:root {
+  --wphoto-bg: #ffffff;
+  --wphoto-surface-muted: #f1f3f4;
+  --wphoto-text: #202124;
+  --wphoto-text-secondary: #5f6368;
+  --wphoto-border: #dadce0;
+  --wphoto-primary: #1a73e8;
+  --wphoto-primary-hover: #1765cc;
+  --wphoto-on-primary: #ffffff;
+  --wphoto-tonal-bg: #e8f0fe;
+  --wphoto-tonal-hover: #d2e3fc;
+  --wphoto-tonal-text: #1967d2;
+  --wphoto-shadow: 0 1px 3px 0 rgba(60, 64, 67, 0.3), 0 4px 8px 3px rgba(60, 64, 67, 0.15);
+  --wphoto-font: "Google Sans", Roboto, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wphoto-bg: #2d2e30;
+    --wphoto-surface-muted: #3c4043;
+    --wphoto-text: #e8eaed;
+    --wphoto-text-secondary: #9aa0a6;
+    --wphoto-border: #5f6368;
+    --wphoto-primary: #8ab4f8;
+    --wphoto-primary-hover: #aecbfa;
+    --wphoto-on-primary: #202124;
+    --wphoto-tonal-bg: #394457;
+    --wphoto-tonal-hover: #465368;
+    --wphoto-tonal-text: #8ab4f8;
+    --wphoto-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.6), 0 4px 8px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Toolbar Trigger Button matching Google Photos native action buttons */
+#wphoto-trigger-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 16px;
+  margin: 0 8px;
+  border: none;
+  border-radius: 18px;
+  background-color: var(--wphoto-tonal-bg);
+  color: var(--wphoto-tonal-text);
+  font-family: var(--wphoto-font);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  vertical-align: middle;
+  align-self: center;
+  z-index: 2147483640;
+}
+
+#wphoto-trigger-btn:hover {
+  background-color: var(--wphoto-tonal-hover);
+}
+
+#wphoto-trigger-btn[data-pinned="true"] {
+  position: fixed;
+  top: 14px;
+  right: 120px;
+  margin: 0;
+}
+
+/* Single Dropdown Menu Card */
+#wphoto-menu-card {
+  position: fixed;
+  z-index: 2147483645;
+  width: 310px;
+  box-sizing: border-box;
+  background-color: var(--wphoto-bg);
+  color: var(--wphoto-text);
+  border: 1px solid var(--wphoto-border);
+  border-radius: 8px;
+  box-shadow: var(--wphoto-shadow);
+  padding: 14px 16px;
+  font-family: var(--wphoto-font);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.wphoto-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--wphoto-border);
+}
+
+.wphoto-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--wphoto-text);
+}
+
+.wphoto-text-btn {
+  border: 1px solid var(--wphoto-border);
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--wphoto-primary);
+  font-family: var(--wphoto-font);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.wphoto-text-btn:hover {
+  background-color: var(--wphoto-surface-muted);
+}
+
+.wphoto-field {
+  margin-bottom: 12px;
+}
+
+.wphoto-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--wphoto-text-secondary);
+  margin-bottom: 6px;
+}
+
+.wphoto-segmented {
+  display: flex;
+  gap: 4px;
+  background-color: var(--wphoto-surface-muted);
+  padding: 3px;
+  border-radius: 6px;
+}
+
+.wphoto-seg-btn {
+  flex: 1;
+  border: none;
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--wphoto-text-secondary);
+  font-family: var(--wphoto-font);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.wphoto-seg-btn[aria-pressed="true"] {
+  background-color: var(--wphoto-bg);
+  color: var(--wphoto-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.wphoto-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.wphoto-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--wphoto-text-secondary);
+  cursor: pointer;
+}
+
+.wphoto-link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--wphoto-primary);
+  font-family: var(--wphoto-font);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.wphoto-note {
+  font-size: 12px;
+  color: var(--wphoto-text-secondary);
+  background-color: var(--wphoto-surface-muted);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+
+.wphoto-primary-btn {
+  width: 100%;
+  height: 36px;
+  border: none;
+  border-radius: 18px;
+  background-color: var(--wphoto-primary);
+  color: var(--wphoto-on-primary);
+  font-family: var(--wphoto-font);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+}
+
+.wphoto-primary-btn:hover:not(:disabled) {
+  background-color: var(--wphoto-primary-hover);
+}
+
+.wphoto-primary-btn:disabled {
+  background-color: var(--wphoto-surface-muted);
+  color: var(--wphoto-text-secondary);
+  cursor: not-allowed;
+}
+
+.wphoto-input-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.wphoto-input {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--wphoto-border);
+  border-radius: 4px;
+  background-color: var(--wphoto-bg);
+  color: var(--wphoto-text);
+  font-family: var(--wphoto-font);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.wphoto-actions-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Floating Batch Status Bar (bottom-right) */
+#wphoto-status-bar {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483644;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background-color: var(--wphoto-bg);
+  color: var(--wphoto-text);
+  border: 1px solid var(--wphoto-border);
+  border-radius: 8px;
+  box-shadow: var(--wphoto-shadow);
+  padding: 10px 14px;
+  font-family: var(--wphoto-font);
+  font-size: 13px;
+}

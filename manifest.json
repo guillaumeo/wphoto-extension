@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Google Photos AI Description",
+  "version": "1.0.0",
+  "description": "Generate concise encyclopedic AI descriptions for Google Photos in multiple languages.",
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://photos.google.com/*"
+      ],
+      "css": [
+        "content/styles.css"
+      ],
+      "js": [
+        "prompts.js",
+        "content/selection.js",
+        "content/dom-caption.js",
+        "content/ai-engine.js",
+        "content/batch-runner.js",
+        "content/ui.js"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "host_permissions": [
+    "https://photos.google.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://*.googleusercontent.com/*"
+  ],
+  "permissions": [
+    "storage",
+    "debugger",
+    "scripting"
+  ]
+}
