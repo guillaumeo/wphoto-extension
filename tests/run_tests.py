@@ -276,8 +276,8 @@ def main():
         const itMeta = ai.composeMetadataCaption({{ people: ["Marco", "Giulia"], location: "Roma", year: "2024" }}, "it");
         if (itMeta !== "Marco e Giulia a Roma, 2024.") throw new Error("Italian metadata fallback failed: " + itMeta);
 
-        // Preamble cleaner across EN, FR, ES
-        if (ai.cleanGeneratedCaption("Here's a caption:\\nA photo of the Eiffel Tower at dusk. Extra sentence.") !== "The Eiffel Tower at dusk.") {{
+        // Preamble cleaner across EN, FR, ES (keeps up to 2 sentences, drops 3rd+)
+        if (ai.cleanGeneratedCaption("Here's a caption:\\nA photo of the Eiffel Tower at dusk. Second sentence. Third sentence.") !== "The Eiffel Tower at dusk. Second sentence.") {{
           throw new Error("EN clean failed");
         }}
         if (ai.cleanGeneratedCaption("Voici une proposition de légende : Une photo montrant le Mont-Saint-Michel sous la brume.") !== "Le Mont-Saint-Michel sous la brume.") {{
@@ -386,6 +386,13 @@ def main():
           if (JSON.stringify(domRes.skippedIds) !== JSON.stringify(["ALB_V1"])) {{
             throw new Error("Album DOM skippedIds failed: " + JSON.stringify(domRes));
           }}
+
+          // 5. Single photo viewer (/photo/<id>) disables selection (eligible === 0)
+          globalThis.location.pathname = "/photo/SINGLE_PHOTO_1";
+          const viewerSum = sel.getSummary();
+          if (viewerSum.mode !== "viewer" || viewerSum.eligible !== 0 || sel.getEligibleIds().length !== 0) {{
+            throw new Error("Expected single photo viewer to have 0 eligible items: " + JSON.stringify(viewerSum));
+          }}
           print("SEL_01_OK");
         }})();
         """
@@ -393,7 +400,7 @@ def main():
 
     runner.run_test(
         "SEL-01",
-        "Technique 1 (Grid checkboxes + stacks + viewer) & Technique 2 (Album enumeration)",
+        "Technique 1 (Grid checkboxes + stacks), Technique 2 (Album enumeration), and single-photo disable",
         sel_01,
     )
 
@@ -874,12 +881,100 @@ def main():
         ai_02,
     )
 
+    def ai_03():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.performance = {{ now: () => Date.now() }};
+        globalThis.setTimeout = (fn) => {{ Promise.resolve().then(fn); return 1; }};
+        globalThis.clearTimeout = () => {{}};
+
+        let fetchAttempt = 0;
+        let retryEvents = [];
+        let always429 = false;
+
+        globalThis.fetch = async () => {{
+          fetchAttempt++;
+          if (always429 || fetchAttempt <= 2) {{
+            return {{
+              ok: false,
+              status: 429,
+              headers: {{ get: (h) => (h.toLowerCase() === "retry-after" ? "3" : null) }},
+              text: async () => "Resource has been exhausted (e.g. check quota)."
+            }};
+          }}
+          return {{
+            ok: true,
+            status: 200,
+            json: async () => ({{
+              candidates: [
+                {{
+                  content: {{
+                    parts: [{{ text: "A sunlit plaza in Madrid." }}]
+                  }}
+                }}
+              ]
+            }})
+          }};
+        }};
+
+        load({prompts_file});
+        load({dom_file});
+        load({ai_file});
+
+        (async () => {{
+          // Case 1: 2x HTTP 429 followed by 200 OK -> succeeds after 2 retries
+          const resOk = await window.WPhotoAiEngine.callGeminiCloud({{
+            apiKey: "TEST_KEY_429",
+            rules: "No people.",
+            instruction: "Describe.",
+            lang: "en",
+            retryDelaysMs: [10, 20, 30],
+            onRetry: (attempt, waitMs) => retryEvents.push({{ attempt, waitMs }})
+          }});
+
+          if (resOk.error || resOk.text !== "A sunlit plaza in Madrid." || resOk.retries429 !== 2) {{
+            throw new Error("Expected 429 backoff recovery on attempt 3, got: " + JSON.stringify(resOk));
+          }}
+          if (retryEvents.length !== 2 || retryEvents[0].waitMs !== 10 || retryEvents[1].waitMs !== 20) {{
+            throw new Error("Unexpected retryEvents: " + JSON.stringify(retryEvents));
+          }}
+
+          // Case 2: Persistent HTTP 429 exhausts all 3 retries (4 total calls) and returns gemini_api_error_429
+          fetchAttempt = 0;
+          always429 = true;
+          const resExhausted = await window.WPhotoAiEngine.callGeminiCloud({{
+            apiKey: "TEST_KEY_429",
+            rules: "No people.",
+            instruction: "Describe.",
+            lang: "en",
+            retryDelaysMs: [5, 5, 5]
+          }});
+          if (!resExhausted.error || !resExhausted.error.startsWith("gemini_api_error_429") || resExhausted.retries429 !== 3 || fetchAttempt !== 4) {{
+            throw new Error("Expected exhausted 429 after 3 retries (4 calls), got: " + JSON.stringify({{ resExhausted, fetchAttempt }}));
+          }}
+
+          print("AI_03_OK");
+        }})();
+        """
+        assert "AI_03_OK" in run_jsc(js)
+
+    runner.run_test(
+        "AI-03",
+        "Cloud Gemini HTTP 429 rate-limit exponential backoff recovery and max-retry exhaustion",
+        ai_03,
+    )
+
     # -------------------------------------------------------------------------
     # Suite 6: Batch Runner & Single-Menu UI (API Key Only Settings, No Icons)
     # -------------------------------------------------------------------------
     print("\n--- Suite 6: Batch Runner & Single-Menu UI ---")
 
     def ui_01():
+        with open(os.path.join(ext_dir, "content/styles.css"), "r", encoding="utf-8") as f:
+            css_text = f.read()
+        assert "#3c4043" in css_text and "#e8eaed" in css_text and "#28292a" in css_text
+        assert "Google Sans" in css_text
+
         js = f"""
         globalThis.window = globalThis;
         globalThis.performance = {{ now: () => Date.now() }};
@@ -891,7 +986,10 @@ def main():
         globalThis.innerHeight = 800;
         globalThis.addEventListener = () => {{}};
         globalThis.MutationObserver = class {{ observe() {{}} }};
-        globalThis.location = {{ pathname: "/photo/P1", href: "https://photos.google.com/photo/P1" }};
+
+        let bodyBgColor = "rgb(255, 255, 255)";
+        globalThis.getComputedStyle = () => ({{ backgroundColor: bodyBgColor, overflowY: "visible" }});
+        globalThis.location = {{ pathname: "/album/A1", href: "https://photos.google.com/album/A1" }};
 
         const storageData = {{}};
         const elementsById = {{}};
@@ -941,6 +1039,7 @@ def main():
                 for (const c of node.children || []) {{
                   if (sel === "svg" && c.tagName === "SVG") out.push(c);
                   if (sel === "button" && c.tagName === "BUTTON") out.push(c);
+                  if (sel === ".wphoto-title" && c.className === "wphoto-title") out.push(c);
                   walk(c);
                 }}
               }};
@@ -996,13 +1095,27 @@ def main():
         (async () => {{
           await window.WPhotoDomCaption.sleep(10);
           const trigger = elementsById["wphoto-trigger-btn"];
-          if (!trigger || trigger.textContent !== "AI Describe") {{
-            throw new Error("Trigger button not mounted with text 'AI Describe'");
+          if (!trigger || trigger.textContent !== "AI Plus" || trigger.getAttribute("aria-label") !== "AI Plus") {{
+            throw new Error("Trigger button not mounted with text 'AI Plus'");
+          }}
+          if (trigger.getAttribute("data-theme") !== "light") {{
+            throw new Error("Expected light theme on white Google Photos background");
           }}
 
+          // Switch Google Photos background to dark mode and open menu
+          bodyBgColor = "rgb(32, 33, 36)";
           trigger.click();
           const card = elementsById["wphoto-menu-card"];
-          if (!card) throw new Error("Menu card did not open");
+          if (!card || card.getAttribute("aria-label") !== "AI Plus Menu") {{
+            throw new Error("Menu card did not open with 'AI Plus Menu' aria-label");
+          }}
+          if (card.getAttribute("data-theme") !== "dark") {{
+            throw new Error("Expected dark theme on dark Google Photos background");
+          }}
+          const titles = card.querySelectorAll(".wphoto-title");
+          if (titles.length !== 1 || titles[0].textContent !== "AI Plus") {{
+            throw new Error("Expected menu header title to be 'AI Plus'");
+          }}
 
           // Verify zero SVG icons inside menu card
           if (card.querySelectorAll("svg").length !== 0) {{
@@ -1011,7 +1124,7 @@ def main():
 
           // Verify language buttons match WPHOTO_PROMPTS (English, Français, Español)
           const buttons = card.querySelectorAll("button").map((b) => b.textContent);
-          for (const expectedBtn of ["API Key", "English", "Français", "Español", "Cloud", "Local", "No", "Yes", "Describe 1 photo"]) {{
+          for (const expectedBtn of ["API Key", "English", "Français", "Español", "Cloud", "Local", "No", "Yes", "Describe album photos"]) {{
             if (!buttons.includes(expectedBtn)) {{
               throw new Error("Missing expected button '" + expectedBtn + "' in: " + JSON.stringify(buttons));
             }}
@@ -1028,6 +1141,14 @@ def main():
           await window.WPhotoUi.clearGeminiApiKey();
           if (storageData.geminiApiKey !== undefined) {{
             throw new Error("API key was not cleared from storage");
+          }}
+
+          // Navigate to a single photo (/photo/P1) -> menu and trigger button must be disabled/removed
+          globalThis.location.pathname = "/photo/P1";
+          globalThis.location.href = "https://photos.google.com/photo/P1";
+          window.WPhotoUi.ensureTriggerButtonMounted();
+          if (elementsById["wphoto-trigger-btn"] || elementsById["wphoto-menu-card"] || window.WPhotoUi.state.menuOpen) {{
+            throw new Error("Expected menu and trigger button to be disabled/removed when viewing a single photo");
           }}
 
           print("UI_01_OK");

@@ -149,9 +149,9 @@
       text = stripped.charAt(0).toUpperCase() + stripped.slice(1);
     }
 
-    const firstSentence = text.match(/^[^.!?]*[.!?]/);
-    if (firstSentence && firstSentence[0].trim().length >= 15) {
-      text = firstSentence[0].trim();
+    const twoSentences = text.match(/^[^.!?]*[.!?](?:\s+[^.!?]*[.!?])?/);
+    if (twoSentences && twoSentences[0].trim().length >= 15) {
+      text = twoSentences[0].trim();
     }
 
     return text.slice(0, CAPTION_MAX_LENGTH);
@@ -186,13 +186,44 @@
     window.__batchAppendLog = appendAiDescLog;
   }
 
+  const DEFAULT_429_BACKOFF_MS = [2000, 5000, 10000];
+
+  function sleepMs(ms) {
+    if (typeof window !== "undefined" && window.WPhotoDomCaption?.sleep) {
+      return window.WPhotoDomCaption.sleep(ms);
+    }
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function resolve429RetryDelayMs(resp, attemptIndex, customDelays) {
+    const schedule =
+      Array.isArray(customDelays) && customDelays.length > 0
+        ? customDelays
+        : (typeof window !== "undefined" && Array.isArray(window.__wphotoRetryDelaysMs)
+            ? window.__wphotoRetryDelaysMs
+            : DEFAULT_429_BACKOFF_MS);
+    const baseDelay = schedule[Math.min(attemptIndex, schedule.length - 1)] ?? 2000;
+    try {
+      const retryAfterHeader = resp?.headers?.get?.("Retry-After") || resp?.headers?.get?.("retry-after");
+      if (retryAfterHeader && !Array.isArray(customDelays)) {
+        const secs = Number(retryAfterHeader);
+        if (Number.isFinite(secs) && secs > 0) {
+          return Math.min(30000, Math.max(baseDelay, Math.round(secs * 1000)));
+        }
+      }
+    } catch (e) {}
+    return baseDelay;
+  }
+
   async function callGeminiCloud({
     apiKey,
     model = "gemini-3.1-flash-lite",
     rules = "",
     instruction = "",
     imgSrc = null,
-    lang = "en"
+    lang = "en",
+    retryDelaysMs = null,
+    onRetry = null
   }) {
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
       return { error: "missing_gemini_api_key" };
@@ -278,13 +309,39 @@
     };
 
     try {
-      let resp = await fetch(buildUrl(model), reqInit);
-      if (resp.status === 404 && model === "gemini-3.1-flash-lite") {
-        resp = await fetch(buildUrl("gemini-3.1-flash-lite-preview"), reqInit);
+      let activeModel = model;
+      let resp = null;
+      let retries429 = 0;
+      const maxRetries429 = Array.isArray(retryDelaysMs) && retryDelaysMs.length > 0
+        ? retryDelaysMs.length
+        : DEFAULT_429_BACKOFF_MS.length;
+
+      for (let attempt = 0; attempt <= maxRetries429; attempt++) {
+        resp = await fetch(buildUrl(activeModel), reqInit);
+        if (resp.status === 404 && activeModel === "gemini-3.1-flash-lite") {
+          activeModel = "gemini-3.1-flash-lite-preview";
+          resp = await fetch(buildUrl(activeModel), reqInit);
+        }
+        if (resp.status === 429 && attempt < maxRetries429) {
+          retries429++;
+          const waitMs = resolve429RetryDelayMs(resp, attempt, retryDelaysMs);
+          if (typeof onRetry === "function") {
+            try {
+              onRetry(retries429, waitMs);
+            } catch (e) {}
+          }
+          await sleepMs(waitMs);
+          continue;
+        }
+        break;
       }
+
       if (!resp.ok) {
         const errText = await resp.text().catch(() => "");
-        return { error: "gemini_api_error_" + resp.status + ": " + errText.slice(0, 150) };
+        return {
+          error: "gemini_api_error_" + resp.status + ": " + errText.slice(0, 150),
+          retries429
+        };
       }
       const data = await resp.json();
       const candParts = data?.candidates?.[0]?.content?.parts;
@@ -301,8 +358,8 @@
         }
       }
       return typeof text === "string" && text.trim().length > 0
-        ? { text: text.trim() }
-        : { error: "empty_gemini_reply" };
+        ? { text: text.trim(), retries429 }
+        : { error: "empty_gemini_reply", retries429 };
     } catch (e) {
       return { error: "gemini_fetch_failed: " + String(e?.message || e) };
     }
@@ -514,7 +571,10 @@
           rules: rulesText,
           instruction: instrText,
           imgSrc: photoImg,
-          lang
+          lang,
+          onRetry: (attempt, waitMs) => {
+            logStep("cloud_retry_429", `attempt=${attempt} wait=${waitMs}ms`);
+          }
         });
         if (cloudRes && !cloudRes.error && typeof cloudRes.text === "string") {
           const cleaned = cleanGeneratedCaption(cloudRes.text);

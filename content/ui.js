@@ -228,16 +228,64 @@
     }
   }
 
+  function parseColorDarkness(cssColor) {
+    if (!cssColor || cssColor === "transparent") return null;
+    const rgb = cssColor.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+    if (rgb) {
+      const lum = 0.299 * Number(rgb[1]) + 0.587 * Number(rgb[2]) + 0.114 * Number(rgb[3]);
+      return lum < 128;
+    }
+    const rgba = cssColor.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
+    if (rgba) {
+      if (Number(rgba[4]) < 0.5) return null;
+      const lum = 0.299 * Number(rgba[1]) + 0.587 * Number(rgba[2]) + 0.114 * Number(rgba[3]);
+      return lum < 128;
+    }
+    return null;
+  }
+
+  function detectGooglePhotosTheme() {
+    if (typeof window === "undefined" || typeof document === "undefined") return "light";
+    if (typeof getComputedStyle === "function") {
+      if (document.body) {
+        const bodyDark = parseColorDarkness(getComputedStyle(document.body).backgroundColor);
+        if (bodyDark !== null) return bodyDark ? "dark" : "light";
+      }
+      if (document.documentElement) {
+        const docDark = parseColorDarkness(getComputedStyle(document.documentElement).backgroundColor);
+        if (docDark !== null) return docDark ? "dark" : "light";
+      }
+    }
+    const prefersDark =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return prefersDark ? "dark" : "light";
+  }
+
+  function applyThemeAttr(el) {
+    if (!el) return;
+    el.setAttribute("data-theme", detectGooglePhotosTheme());
+  }
+
   function closeMenu() {
     state.menuOpen = false;
     state.view = "main";
-    const existing = document.getElementById(MENU_CARD_ID);
+    const btn = typeof document !== "undefined" ? document.getElementById(TRIGGER_BTN_ID) : null;
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    const existing = typeof document !== "undefined" ? document.getElementById(MENU_CARD_ID) : null;
     if (existing) existing.remove();
   }
 
   function renderMenu() {
-    if (!state.menuOpen || typeof document === "undefined") {
-      const existing = document.getElementById(MENU_CARD_ID);
+    if (
+      !state.menuOpen ||
+      typeof document === "undefined" ||
+      window.WPhotoSelection.parsePhotoIdFromPath()
+    ) {
+      if (window.WPhotoSelection?.parsePhotoIdFromPath?.()) {
+        state.menuOpen = false;
+      }
+      const existing = typeof document !== "undefined" ? document.getElementById(MENU_CARD_ID) : null;
       if (existing) existing.remove();
       return;
     }
@@ -247,9 +295,10 @@
       card = document.createElement("div");
       card.id = MENU_CARD_ID;
       card.setAttribute("role", "dialog");
-      card.setAttribute("aria-label", "AI Description Menu");
+      card.setAttribute("aria-label", "AI Plus Menu");
       document.body.appendChild(card);
     }
+    applyThemeAttr(card);
     positionMenuCard(card);
     card.innerHTML = "";
 
@@ -379,7 +428,7 @@
 
     const title = document.createElement("span");
     title.className = "wphoto-title";
-    title.textContent = "AI Description";
+    title.textContent = "AI Plus";
 
     const apiKeyBtn = document.createElement("button");
     apiKeyBtn.type = "button";
@@ -572,6 +621,7 @@
       bar.id = STATUS_BAR_ID;
       document.body.appendChild(bar);
     }
+    applyThemeAttr(bar);
     bar.innerHTML = "";
 
     const total = batch.photoIds?.length || 0;
@@ -584,7 +634,7 @@
 
     const textSpan = document.createElement("span");
     if (isRunning) {
-      textSpan.textContent = `AI Describe: ${Math.min(processed + 1, total)} / ${total} (${done} done, ${skipped} skipped)`;
+      textSpan.textContent = `AI Plus: ${Math.min(processed + 1, total)} / ${total} (${done} done, ${skipped} skipped)`;
     } else if (isPaused) {
       textSpan.textContent = `Paused at ${processed} / ${total} (${done} done, ${skipped} skipped)`;
     } else {
@@ -648,33 +698,42 @@
     return clearBtn.parentElement;
   }
 
-  function findViewerActionContainer() {
-    const infoBtn = document.querySelector(
-      'button[aria-label="Open info"], button[aria-label="Close info"], button[aria-label="Informations"], button[aria-label="Info"], button[aria-label="Abrir información"], button[jslog*="8918"]'
-    );
-    if (infoBtn && infoBtn.offsetParent !== null && !infoBtn.closest("#gb")) {
-      return { parent: infoBtn.parentElement, before: infoBtn };
-    }
-    return null;
-  }
-
   function ensureTriggerButtonMounted() {
     if (typeof document === "undefined" || !document.body) return;
+
+    // Disable and remove the menu & trigger button when looking at a single photo (/photo/<id>)
+    if (window.WPhotoSelection.parsePhotoIdFromPath()) {
+      if (state.menuOpen) {
+        closeMenu();
+      }
+      const existingBtn = document.getElementById(TRIGGER_BTN_ID);
+      if (existingBtn) {
+        existingBtn.remove();
+      }
+      return;
+    }
+
     let btn = document.getElementById(TRIGGER_BTN_ID);
     if (!btn) {
       btn = document.createElement("button");
       btn.id = TRIGGER_BTN_ID;
       btn.type = "button";
-      btn.textContent = "AI Describe";
+      btn.textContent = "AI Plus";
+      btn.setAttribute("aria-label", "AI Plus");
+      btn.setAttribute("aria-haspopup", "dialog");
+      btn.setAttribute("aria-expanded", String(state.menuOpen));
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         state.menuOpen = !state.menuOpen;
+        btn.setAttribute("aria-expanded", String(state.menuOpen));
         if (state.menuOpen && state.model === "local") {
           triggerLocalProbe();
         }
         renderMenu();
       });
     }
+    applyThemeAttr(btn);
+    btn.setAttribute("aria-expanded", String(state.menuOpen));
 
     // 1. Selection bar placement
     const selContainer = findSelectionActionContainer();
@@ -686,19 +745,7 @@
       return;
     }
 
-    // 2. Single photo viewer placement
-    if (window.WPhotoSelection.parsePhotoIdFromPath()) {
-      const viewerCluster = findViewerActionContainer();
-      if (viewerCluster && viewerCluster.parent) {
-        btn.removeAttribute("data-pinned");
-        if (btn.parentElement !== viewerCluster.parent) {
-          viewerCluster.parent.insertBefore(btn, viewerCluster.before);
-        }
-        return;
-      }
-    }
-
-    // 3. Fallback pinned header placement
+    // 2. Fallback pinned header placement (library / album view)
     btn.setAttribute("data-pinned", "true");
     if (btn.parentElement !== document.body) {
       document.body.appendChild(btn);
@@ -763,6 +810,7 @@
   window.WPhotoUi = {
     state,
     maskApiKey,
+    detectGooglePhotosTheme,
     saveGeminiApiKey,
     clearGeminiApiKey,
     renderMenu,

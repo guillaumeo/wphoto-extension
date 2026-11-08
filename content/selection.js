@@ -164,8 +164,7 @@
   }
 
   function getEligibleIds() {
-    const viewerId = parsePhotoIdFromPath();
-    if (viewerId) return [viewerId];
+    if (parsePhotoIdFromPath()) return [];
     scanVisibleCheckboxes();
     return sortedEntries()
       .filter((item) => item.classification === "eligible")
@@ -183,13 +182,12 @@
   function getSummary() {
     const viewerId = parsePhotoIdFromPath();
     if (viewerId) {
-      const hasVideo = typeof document !== "undefined" && !!document.querySelector("video");
       return {
         mode: "viewer",
-        eligible: hasVideo ? 0 : 1,
-        videos: hasVideo ? 1 : 0,
-        skipped: hasVideo ? 1 : 0,
-        total: 1,
+        eligible: 0,
+        videos: 0,
+        skipped: 0,
+        total: 0,
         viewerPhotoId: viewerId,
         inAlbum: false
       };
