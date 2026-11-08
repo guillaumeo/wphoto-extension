@@ -419,6 +419,15 @@
     el.setAttribute("data-theme", detectGooglePhotosTheme());
   }
 
+  function shouldHideTriggerAndMenu() {
+    if (!window.WPhotoSelection) return true;
+    if (window.WPhotoSelection.parsePhotoIdFromPath()) return true;
+    const summary = window.WPhotoSelection.getSummary();
+    if (summary.mode === "viewer") return true;
+    if (!summary.inAlbum && summary.eligible === 0) return true;
+    return false;
+  }
+
   function closeMenu() {
     state.menuOpen = false;
     state.view = "main";
@@ -429,12 +438,9 @@
   }
 
   function renderMenu() {
-    if (
-      !state.menuOpen ||
-      typeof document === "undefined" ||
-      window.WPhotoSelection.parsePhotoIdFromPath()
-    ) {
-      if (window.WPhotoSelection?.parsePhotoIdFromPath?.()) {
+    const hideNow = shouldHideTriggerAndMenu();
+    if (!state.menuOpen || typeof document === "undefined" || hideNow) {
+      if (hideNow) {
         state.menuOpen = false;
       }
       const existing = typeof document !== "undefined" ? document.getElementById(MENU_CARD_ID) : null;
@@ -1044,8 +1050,8 @@
   function ensureTriggerButtonMounted() {
     if (typeof document === "undefined" || !document.body) return;
 
-    // Disable and remove the menu & trigger button when looking at a single photo (/photo/<id>)
-    if (window.WPhotoSelection.parsePhotoIdFromPath()) {
+    // Hide the menu & trigger button when visualizing one photo or on the Google Photos home page (no album / no selection)
+    if (shouldHideTriggerAndMenu()) {
       if (state.menuOpen) {
         closeMenu();
       }
@@ -1174,7 +1180,14 @@
       renderStatusBar();
     });
 
-    setInterval(ensureTriggerButtonMounted, 1200);
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("popstate", () => {
+        ensureTriggerButtonMounted();
+        if (state.menuOpen) renderMenu();
+      });
+    }
+
+    setInterval(ensureTriggerButtonMounted, 400);
     await window.WPhotoBatchRunner.continueBatchIfActive();
   }
 

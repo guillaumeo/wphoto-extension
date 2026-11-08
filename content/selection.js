@@ -7,6 +7,7 @@
   const selectedRegistry = new Map();
   let selectionOrderCounter = 0;
   let lastPathKey = "";
+  let lastFullPathname = "";
   const changeListeners = new Set();
 
   function notifyListeners() {
@@ -28,7 +29,8 @@
   }
 
   function parsePhotoIdFromPath(pathname = location.pathname) {
-    const match = pathname.match(/^(?:\/u\/\d+)?\/photo\/([^/?#]+)$/);
+    if (typeof pathname !== "string") return null;
+    const match = pathname.match(/\/photo\/([^/?#]+)/);
     return match ? match[1] : null;
   }
 
@@ -348,7 +350,10 @@
 
   function checkNavigationReset() {
     if (typeof location === "undefined") return false;
-    const currentKey = location.pathname.replace(/\/photo\/[^/?#]+.*$/, "");
+    const fullPath = location.pathname || "";
+    const pathChanged = Boolean(lastFullPathname && fullPath !== lastFullPathname);
+    lastFullPathname = fullPath;
+    const currentKey = fullPath.replace(/\/photo\/[^/?#]+.*$/, "");
     if (lastPathKey && currentKey !== lastPathKey) {
       lastPathKey = currentKey;
       selectedRegistry.clear();
@@ -356,7 +361,7 @@
       return true;
     }
     lastPathKey = currentKey;
-    return false;
+    return pathChanged;
   }
 
   function sortedEntries() {

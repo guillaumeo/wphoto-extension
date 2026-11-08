@@ -1534,12 +1534,24 @@ def main():
             throw new Error("API key was not cleared from storage");
           }}
 
-          // Navigate to a single photo (/photo/P1) -> menu and trigger button must be disabled/removed
-          globalThis.location.pathname = "/photo/P1";
-          globalThis.location.href = "https://photos.google.com/photo/P1";
-          window.WPhotoUi.ensureTriggerButtonMounted();
-          if (elementsById["wphoto-trigger-btn"] || elementsById["wphoto-menu-card"] || window.WPhotoUi.state.menuOpen) {{
-            throw new Error("Expected menu and trigger button to be disabled/removed when viewing a single photo");
+          // Navigate to a single photo (/photo/P1 and /album/A1/photo/P1) -> menu and trigger button must be hidden/removed
+          for (const singlePhotoPath of ["/photo/P1", "/album/A1/photo/P1", "/u/0/album/A1/photo/P1"]) {{
+            globalThis.location.pathname = singlePhotoPath;
+            globalThis.location.href = "https://photos.google.com" + singlePhotoPath;
+            window.WPhotoUi.ensureTriggerButtonMounted();
+            if (elementsById["wphoto-trigger-btn"] || elementsById["wphoto-menu-card"] || window.WPhotoUi.state.menuOpen) {{
+              throw new Error("Expected menu and trigger button to be hidden when viewing a single photo at " + singlePhotoPath);
+            }}
+          }}
+
+          // Navigate to Google Photos home page (/ and /u/0/) with no selection -> menu and trigger button must be hidden
+          for (const homePath of ["/", "/u/0/", "/albums"]) {{
+            globalThis.location.pathname = homePath;
+            globalThis.location.href = "https://photos.google.com" + homePath;
+            window.WPhotoUi.ensureTriggerButtonMounted();
+            if (elementsById["wphoto-trigger-btn"] || elementsById["wphoto-menu-card"] || window.WPhotoUi.state.menuOpen) {{
+              throw new Error("Expected menu and trigger button to be hidden on home page with no selection at " + homePath);
+            }}
           }}
 
           // Test top-bar action cluster placement when returning to /album/A1
