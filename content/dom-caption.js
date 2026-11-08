@@ -27,13 +27,15 @@
 
   async function waitFor(predicate, timeoutMs, pollMs = 80) {
     const start = performance.now();
-    while (performance.now() - start < timeoutMs) {
+    let virtualElapsed = 0;
+    while (Math.max(performance.now() - start, virtualElapsed) < timeoutMs) {
       if (isBatchAborted()) return null;
       try {
         const res = predicate();
         if (res) return res;
       } catch (e) {}
       await sleep(pollMs);
+      virtualElapsed += pollMs;
     }
     return null;
   }
@@ -81,9 +83,44 @@
   function isElementVisible(el) {
     if (!el) return false;
     if (el.offsetParent === null) return false;
+    if (typeof el.closest === "function" && el.closest('[aria-hidden="true"], [hidden]')) {
+      return false;
+    }
+    if (typeof el.checkVisibility === "function") {
+      try {
+        if (
+          !el.checkVisibility({
+            visibilityProperty: true,
+            opacityProperty: true,
+            contentVisibilityAuto: true
+          })
+        ) {
+          return false;
+        }
+      } catch (e) {}
+    }
     if (typeof el.getBoundingClientRect === "function") {
       const r = el.getBoundingClientRect();
       if (r && (r.width === 0 || r.height === 0)) return false;
+      if (
+        r &&
+        typeof r.left === "number" &&
+        typeof window !== "undefined" &&
+        typeof window.innerWidth === "number" &&
+        window.innerWidth > 0
+      ) {
+        const right = typeof r.right === "number" ? r.right : r.left + (r.width || 0);
+        const bottom = typeof r.bottom === "number" ? r.bottom : (r.top || 0) + (r.height || 0);
+        if (right <= 0 || r.left >= window.innerWidth) return false;
+        if (
+          typeof window.innerHeight === "number" &&
+          window.innerHeight > 0 &&
+          typeof r.top === "number" &&
+          (bottom <= 0 || r.top >= window.innerHeight)
+        ) {
+          return false;
+        }
+      }
     }
     return true;
   }
@@ -139,8 +176,22 @@
     return false;
   }
 
-  function findVisibleDescriptionTextarea() {
+  function findVisibleDescriptionTextarea(options = {}) {
     if (typeof document === "undefined") return null;
+    const excludeEl = options && options.excludeEl ? options.excludeEl : null;
+    const excludeEls = options && options.excludeEls ? options.excludeEls : null;
+    const strictExclude = Boolean(options && options.strictExclude);
+
+    const isExcluded = (ta) => {
+      if (!ta) return false;
+      if (excludeEl && ta === excludeEl) return true;
+      if (excludeEls) {
+        if (typeof excludeEls.has === "function" && excludeEls.has(ta)) return true;
+        if (Array.isArray(excludeEls) && excludeEls.includes(ta)) return true;
+      }
+      return false;
+    };
+
     const placeholderSelectors = [
       '[aria-label="Add a description"]',
       '[aria-label="Ajouter une description"]',
@@ -152,10 +203,8 @@
     ];
     const placeholders = Array.from(document.querySelectorAll(placeholderSelectors.join(", ")));
     for (const ph of placeholders) {
-      if (ph.tagName !== "TEXTAREA" && ph.offsetParent !== null) {
-        try {
-          ph.click();
-        } catch (e) {}
+      if (ph.tagName !== "TEXTAREA" && isElementVisible(ph)) {
+        triggerDirectDomClick(ph);
       }
     }
 
@@ -168,22 +217,54 @@
       'textarea[aria-label="Agregar una descripción"]',
       `textarea[jsname="${DESCRIPTION_JSNAME}"]`
     ];
-    const direct = Array.from(document.querySelectorAll(directSelectors.join(", "))).filter((ta) => {
-      if (ta.offsetParent === null) return false;
-      const rect = ta.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    });
-    if (direct.length > 0) {
-      return direct[direct.length - 1];
-    }
-
+    let candidates = Array.from(document.querySelectorAll(directSelectors.join(", "))).filter((ta) =>
+      isElementVisible(ta)
+    );
     for (const ph of placeholders) {
-      if (ph.tagName === "TEXTAREA" && ph.offsetParent !== null) {
-        const rect = ph.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) return ph;
+      if (ph.tagName === "TEXTAREA" && isElementVisible(ph) && !candidates.includes(ph)) {
+        candidates.push(ph);
       }
     }
-    return null;
+
+    if ((excludeEl || excludeEls) && candidates.length > 0) {
+      const nonExcluded = candidates.filter((ta) => !isExcluded(ta));
+      if (nonExcluded.length > 0) {
+        candidates = nonExcluded;
+      } else if (strictExclude) {
+        return null;
+      }
+    }
+
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0];
+
+    if (
+      typeof document.activeElement === "object" &&
+      document.activeElement &&
+      candidates.includes(document.activeElement)
+    ) {
+      return document.activeElement;
+    }
+
+    if (typeof document.elementFromPoint === "function") {
+      for (let i = candidates.length - 1; i >= 0; i--) {
+        const ta = candidates[i];
+        if (typeof ta.getBoundingClientRect === "function") {
+          const r = ta.getBoundingClientRect();
+          if (r && r.width > 0 && r.height > 0) {
+            const hit = document.elementFromPoint(
+              Math.round(r.left + r.width / 2),
+              Math.round(r.top + r.height / 2)
+            );
+            if (hit && (hit === ta || (typeof ta.contains === "function" && ta.contains(hit)))) {
+              return ta;
+            }
+          }
+        }
+      }
+    }
+
+    return candidates[candidates.length - 1];
   }
 
   function findInfoButton() {
@@ -467,7 +548,13 @@
     return prev;
   }
 
-  async function runCaption({ text, overwrite = false, forceWrite = false }) {
+  async function runCaption({
+    text,
+    overwrite = false,
+    forceWrite = false,
+    excludeTextarea = null,
+    excludeTextareas = null
+  }) {
     const t0 = performance.now();
     const timing = {
       panelOpenMs: -1,
@@ -479,9 +566,10 @@
       saveXhrs: -1
     };
 
+    let textarea = null;
     const finish = (success, error, errorDetail) => {
       timing.totalMs = Math.round(performance.now() - t0);
-      return { success, error, errorDetail, timing };
+      return { success, error, errorDetail, timing, textarea };
     };
 
     const panelStart = performance.now();
@@ -491,15 +579,30 @@
     }
     timing.panelOpenMs = Math.round(performance.now() - panelStart);
 
+    const hasExclusion = Boolean(
+      excludeTextarea ||
+        (excludeTextareas &&
+          ((typeof excludeTextareas.size === "number" && excludeTextareas.size > 0) ||
+            (Array.isArray(excludeTextareas) && excludeTextareas.length > 0)))
+    );
+
     const waitTaStart = performance.now();
     let reopenedOnce = false;
+    let strictPollCount = 0;
     const found = await waitFor(() => {
-      const ta = findVisibleDescriptionTextarea();
+      const elapsed = performance.now() - waitTaStart;
+      const useStrict = hasExclusion && strictPollCount < 5 && elapsed < 750;
+      strictPollCount++;
+      const ta = findVisibleDescriptionTextarea({
+        excludeEl: excludeTextarea,
+        excludeEls: excludeTextareas,
+        strictExclude: useStrict
+      });
       if (ta) return { kind: "textarea", el: ta };
       if (typeof document !== "undefined" && document.querySelector("video")) {
         return { kind: "video" };
       }
-      if (!reopenedOnce && performance.now() - waitTaStart > 2500) {
+      if (!reopenedOnce && elapsed > 2500) {
         reopenedOnce = true;
         ensureInfoPanelOpen({ forceToggleIfNoTextarea: true }).catch(() => {});
       }
@@ -515,17 +618,22 @@
       return finish(false, "skipped_video", "video items are not supported");
     }
 
-    let textarea = found.el;
+    textarea = found.el;
     const settleStart = performance.now();
-    for (let i = 0; i < 6 && performance.now() - settleStart <= 2000; i++) {
-      await sleep(250);
-      const latest = findVisibleDescriptionTextarea();
+    const maxSettleIters = hasExclusion ? 2 : 6;
+    const settleSleepMs = hasExclusion ? 150 : 250;
+    for (let i = 0; i < maxSettleIters && performance.now() - settleStart <= 2000; i++) {
+      await sleep(settleSleepMs);
+      const latest = findVisibleDescriptionTextarea({
+        excludeEl: excludeTextarea,
+        excludeEls: excludeTextareas
+      });
       if (!latest || latest === textarea) break;
       textarea = latest;
     }
     timing.textareaVisibleMs = Math.round(performance.now() - waitTaStart);
 
-    const currentVal = textarea.value || "";
+    let currentVal = textarea.value || "";
     if (!overwrite && currentVal.trim().length > 0) {
       return finish(false, "skipped_existing_description", "existing description preserved");
     }
@@ -543,8 +651,8 @@
 
     const focusStart = performance.now();
     const rect = textarea.getBoundingClientRect();
-    const cx = Math.round(rect.left + rect.width / 2);
-    const cy = Math.round(rect.top + rect.height / 2);
+    let cx = Math.round(rect.left + rect.width / 2);
+    let cy = Math.round(rect.top + rect.height / 2);
 
     let clickRes = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
     if (!clickRes.ok && !isBatchAborted()) {
@@ -563,9 +671,35 @@
       return finish(false, "click_dispatch_failed", clickRes.error);
     }
 
+    try {
+      textarea.focus?.();
+    } catch (e) {}
+
+    const checkTextareaFocused = () => {
+      const active = document.activeElement;
+      if (!active) return null;
+      if (active === textarea) return textarea;
+      if (active.tagName === "TEXTAREA" && isElementVisible(active)) {
+        textarea = active;
+        return textarea;
+      }
+      return null;
+    };
+
     await sleep(60);
-    let focused = !!(await waitFor(() => document.activeElement === textarea || null, FOCUS_LAND_TIMEOUT_MS));
+    let focused = !!(await waitFor(checkTextareaFocused, FOCUS_LAND_TIMEOUT_MS));
     for (let attempt = 0; !focused && attempt < FOCUS_RECLICK_ATTEMPTS && !isBatchAborted(); attempt++) {
+      const latestTa =
+        findVisibleDescriptionTextarea({
+          excludeEl: excludeTextarea,
+          excludeEls: excludeTextareas
+        }) || textarea;
+      if (latestTa && latestTa !== textarea) {
+        textarea = latestTa;
+      }
+      const rRetry = textarea.getBoundingClientRect();
+      cx = Math.round(rRetry.left + rRetry.width / 2);
+      cy = Math.round(rRetry.top + rRetry.height / 2);
       let retryClick = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
       if (!retryClick.ok && !isBatchAborted()) {
         const attach = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
@@ -573,7 +707,10 @@
           retryClick = await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
         }
       }
-      focused = !!(await waitFor(() => document.activeElement === textarea || null, FOCUS_LAND_TIMEOUT_MS));
+      try {
+        textarea.focus?.();
+      } catch (e) {}
+      focused = !!(await waitFor(checkTextareaFocused, FOCUS_LAND_TIMEOUT_MS));
     }
     if (isBatchAborted()) {
       return finish(false, "batch_aborted", "cancelled by user");
@@ -582,7 +719,18 @@
       return finish(false, "caption_focus_failed");
     }
 
-    if (currentVal.length > 0) {
+    // Re-read value from the actually focused textarea (in case checkTextareaFocused adopted a newly mounted slide textarea)
+    currentVal = textarea.value || "";
+    if (!overwrite && currentVal.trim().length > 0) {
+      return finish(false, "skipped_existing_description", "existing description preserved");
+    }
+    if (!forceWrite && currentVal === targetText) {
+      timing.focusToInsertMs = 0;
+      timing.blurToSettleMs = 0;
+      return finish(true);
+    }
+
+    if (currentVal.length > 0 || forceWrite) {
       let selAll = await sendToBackground({
         type: "BATCH_DISPATCH_KEY",
         key: "a",
@@ -612,6 +760,16 @@
         return finish(false, "key_dispatch_failed", selAll.error || "select_all_failed");
       }
       await sleep(30);
+    }
+
+    if (document.activeElement !== textarea && !isBatchAborted()) {
+      try {
+        textarea.focus?.();
+      } catch (e) {}
+      if (document.activeElement !== textarea) {
+        await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
+        await sleep(40);
+      }
     }
 
     let insertRes = await sendToBackground({ type: "BATCH_INSERT_TEXT", text: targetText });
@@ -687,6 +845,7 @@
     waitFor,
     sendToBackground,
     triggerDirectDomClick,
+    isElementVisible,
     isPhotoNotFoundPage,
     isInfoPanelReadOnlyUnowned,
     isInfoPanelOpen,

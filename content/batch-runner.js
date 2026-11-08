@@ -62,6 +62,8 @@
       if (!activeBatch) return null;
       activeBatch.retryPhotoIds = activeBatch.retryPhotoIds || {};
       activeBatch.failureReasons = activeBatch.failureReasons || {};
+      activeBatch.prefilledCaptions = activeBatch.prefilledCaptions || {};
+      activeBatch.stackFallbackIds = activeBatch.stackFallbackIds || {};
       isBatchRunningInMemory = activeBatch.completedAt === null && activeBatch.lastReason === null;
       return activeBatch;
     } catch (e) {
@@ -174,9 +176,15 @@
     }
 
     const timeoutToken = Symbol("photo_timeout");
+    const prefilledCaption =
+      batch.prefilledCaptions && typeof batch.prefilledCaptions[photoId] === "string"
+        ? batch.prefilledCaptions[photoId]
+        : null;
     const runPromise = ai.runAiDescription({
       ...batch.options,
-      photoId
+      photoId,
+      prefilledCaption,
+      alreadyCompletedIds: batch.completedIds || []
     });
     const outcome = await Promise.race([
       runPromise,
@@ -228,6 +236,9 @@
     }
 
     let extraCompleted = [];
+    let pendingStackIds = [];
+    let sharedCaption = null;
+    let actualCaptionedIds = [];
     try {
       if (
         result.success &&
@@ -240,13 +251,81 @@
             (id) => !latestBatch.completedIds.includes(id) && id !== photoId
           );
         }
+        if (Array.isArray(parsed.pendingStackIds)) {
+          pendingStackIds = parsed.pendingStackIds.filter(
+            (id) => typeof id === "string" && id.length > 0 && !latestBatch.completedIds.includes(id)
+          );
+        }
+        if (typeof parsed.sharedCaption === "string" && parsed.sharedCaption.trim().length > 0) {
+          sharedCaption = parsed.sharedCaption.trim();
+        }
+        if (Array.isArray(parsed.captionedIds)) {
+          actualCaptionedIds = parsed.captionedIds.filter(
+            (id) => typeof id === "string" && id.length > 0
+          );
+        }
       }
     } catch (e) {}
 
+    const nextPrefilledCaptions = { ...(latestBatch.prefilledCaptions || {}) };
+    const nextStackFallbackIds = { ...(latestBatch.stackFallbackIds || {}) };
+    let nextPhotoIds = [...latestBatch.photoIds];
+
+    if (sharedCaption) {
+      for (const pid of pendingStackIds) {
+        nextPrefilledCaptions[pid] = sharedCaption;
+        if (
+          pid !== photoId &&
+          !nextPhotoIds.includes(pid) &&
+          !latestBatch.completedIds.includes(pid) &&
+          !extraCompleted.includes(pid)
+        ) {
+          const curIdx = nextPhotoIds.indexOf(photoId);
+          if (curIdx >= 0) {
+            nextPhotoIds.splice(curIdx + 1, 0, pid);
+          } else {
+            nextPhotoIds.push(pid);
+          }
+        }
+      }
+    }
+
+    let stepCompletedIds = [];
+    if (result.success) {
+      const photoIdStillPending =
+        pendingStackIds.includes(photoId) &&
+        actualCaptionedIds.length > 0 &&
+        !actualCaptionedIds.includes(photoId) &&
+        !nextStackFallbackIds[photoId];
+
+      if (photoIdStillPending && sharedCaption) {
+        nextStackFallbackIds[photoId] = 1;
+        nextPrefilledCaptions[photoId] = sharedCaption;
+        for (const cid of actualCaptionedIds) {
+          if (!latestBatch.completedIds.includes(cid)) {
+            stepCompletedIds.push(cid);
+          }
+          if (!nextPhotoIds.includes(cid)) {
+            const curIdx = nextPhotoIds.indexOf(photoId);
+            if (curIdx >= 0) {
+              nextPhotoIds.splice(curIdx, 0, cid);
+            } else {
+              nextPhotoIds.push(cid);
+            }
+          }
+        }
+      } else {
+        stepCompletedIds = [photoId, ...extraCompleted];
+      }
+    }
+
     const nextBatch = {
       ...latestBatch,
+      photoIds: nextPhotoIds,
+      prefilledCaptions: nextPrefilledCaptions,
+      stackFallbackIds: nextStackFallbackIds,
       completedIds: result.success
-        ? [...latestBatch.completedIds, photoId, ...extraCompleted]
+        ? Array.from(new Set([...latestBatch.completedIds, ...stepCompletedIds]))
         : latestBatch.completedIds,
       skippedIds: isSkipped ? [...latestBatch.skippedIds, photoId] : latestBatch.skippedIds,
       failedIds:

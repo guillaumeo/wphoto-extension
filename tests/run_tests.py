@@ -1293,8 +1293,32 @@ def main():
           if (insertedTexts[0].photoId !== "STACK_TOP_2" || insertedTexts[1].photoId !== "STACK_ENTRY_1") {{
             throw new Error("Unexpected stack caption order: " + JSON.stringify(insertedTexts));
           }}
+          if (insertedTexts[0].text !== insertedTexts[1].text) {{
+            throw new Error("Expected identical caption for both stack photos");
+          }}
+          // Verify model was only called ONCE for the 2-photo stack (1x 404 + 1x 200 on first run)
+          if (fetchUrls.length !== 2) {{
+            throw new Error("Expected model to be called only once for the stack, got: " + JSON.stringify(fetchUrls));
+          }}
 
-          // Second call should use cached gemini-3.1-flash-lite-preview directly without 404ing on gemini-3.1-flash-lite
+          // Verify prefilledCaption reuses the exact same text without calling fetch at all
+          fetchUrls = [];
+          insertedTexts = [];
+          currentPhotoId = "STACK_ENTRY_1";
+          const resPrefilled = await window.WPhotoAiEngine.runAiDescription({{
+            photoId: "STACK_ENTRY_1",
+            lang: "fr",
+            model: "cloud",
+            overwrite: true,
+            prefilledCaption: "Panoramique sur la Mayenne et les ponts de Laval.",
+            alreadyCompletedIds: ["STACK_TOP_2"],
+            verbose: false
+          }});
+          if (!resPrefilled.success || fetchUrls.length !== 0 || resPrefilled.timing.generateMs !== 0 || insertedTexts.length !== 1) {{
+            throw new Error("Expected prefilledCaption to skip AI model call and write same text once: " + JSON.stringify({{ resPrefilled, fetchUrls, insertedTexts }}));
+          }}
+
+          // Second cloud call should use cached gemini-3.1-flash-lite-preview directly without 404ing on gemini-3.1-flash-lite
           fetchUrls = [];
           await window.WPhotoAiEngine.callGeminiCloud({{
             apiKey: "TEST_KEY_STACK",
@@ -1644,10 +1668,25 @@ def main():
         load({runner_file});
 
         let attemptCount = 0;
-        window.WPhotoAiEngine.runAiDescription = async ({{ photoId }}) => {{
+        let receivedPrefilled = {{}};
+        window.WPhotoAiEngine.runAiDescription = async ({{ photoId, prefilledCaption }}) => {{
           attemptCount++;
+          receivedPrefilled[photoId] = prefilledCaption || null;
           if (photoId === "P1" && attemptCount === 1) {{
             return {{ success: false, error: "textarea_not_visible", timing: {{}} }};
+          }}
+          if (photoId === "P1") {{
+            // Simulate a stack where P1 succeeded and P1_STACK_2 is pending fallback navigation with sharedCaption
+            return {{
+              success: true,
+              errorDetail: JSON.stringify({{
+                extraCompletedIds: [],
+                pendingStackIds: ["P1_STACK_2"],
+                captionedIds: ["P1"],
+                sharedCaption: "Shared stack caption."
+              }}),
+              timing: {{}}
+            }};
           }}
           return {{ success: true, timing: {{}} }};
         }};
@@ -1664,10 +1703,16 @@ def main():
             throw new Error("Expected 1x reload retry on transient textarea_not_visible");
           }}
 
-          // Continue batch after reload -> P1 succeeds and navigates to P2
+          // Continue batch after reload -> P1 succeeds, does NOT falsely mark P1_STACK_2 completed yet, and navigates to P1_STACK_2 next
           await window.WPhotoBatchRunner.continueBatchIfActive();
-          if (currentPath !== "/photo/P2" || !storageData.activeBatch.completedIds.includes("P1")) {{
-            throw new Error("Expected P1 completion and transition to /photo/P2, got: " + currentPath);
+          if (currentPath !== "/photo/P1_STACK_2" || storageData.activeBatch.completedIds.length !== 1 || !storageData.activeBatch.completedIds.includes("P1")) {{
+            throw new Error("Expected only P1 in completedIds and transition to /photo/P1_STACK_2, got: " + JSON.stringify({{ currentPath, completedIds: storageData.activeBatch.completedIds }}));
+          }}
+
+          // Continue on P1_STACK_2 -> receives prefilledCaption="Shared stack caption." without calling model again, then transitions to /photo/P2
+          await window.WPhotoBatchRunner.continueBatchIfActive();
+          if (receivedPrefilled["P1_STACK_2"] !== "Shared stack caption." || currentPath !== "/photo/P2") {{
+            throw new Error("Expected P1_STACK_2 to receive prefilledCaption and transition to /photo/P2, got: " + JSON.stringify({{ receivedPrefilled, currentPath }}));
           }}
 
           // Pause & Resume
@@ -1676,8 +1721,8 @@ def main():
             throw new Error("Expected batch to pause");
           }}
           await window.WPhotoBatchRunner.resumeBatch();
-          if (storageData.activeBatch.completedIds.length !== 2 || storageData.activeBatch.completedAt === null) {{
-            throw new Error("Expected P2 to complete after resume: " + JSON.stringify(storageData.activeBatch));
+          if (storageData.activeBatch.completedIds.length !== 3 || storageData.activeBatch.completedAt === null) {{
+            throw new Error("Expected P1, P1_STACK_2, and P2 to complete after resume: " + JSON.stringify(storageData.activeBatch));
           }}
           if (currentPath !== "/album/A1") {{
             throw new Error("Expected return to originUrl /album/A1 after completion, got: " + currentPath);

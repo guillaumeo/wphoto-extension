@@ -654,6 +654,61 @@
     } catch (e) {}
   }
 
+  function isThumbVisible(el) {
+    if (!el) return false;
+    if (typeof el.closest === "function" && el.closest('[aria-hidden="true"], [hidden]')) {
+      return false;
+    }
+    if (typeof el.checkVisibility === "function") {
+      try {
+        if (
+          !el.checkVisibility({
+            visibilityProperty: true,
+            opacityProperty: true,
+            contentVisibilityAuto: true
+          })
+        ) {
+          return false;
+        }
+        if (typeof el.getBoundingClientRect === "function") {
+          const r = el.getBoundingClientRect();
+          if (r && (r.width === 0 || r.height === 0)) return false;
+        }
+        return true;
+      } catch (e) {}
+    }
+    return el.offsetParent !== null;
+  }
+
+  function extractThumbPhotoId(el) {
+    if (!el) return null;
+    if (typeof el.hasAttribute === "function" && el.hasAttribute("data-photo-id")) {
+      const directId = el.getAttribute?.("data-photo-id");
+      if (directId && typeof directId === "string" && directId.trim().length > 0) {
+        return directId.trim();
+      }
+    }
+    const href =
+      (typeof el.hasAttribute === "function" && el.hasAttribute("href") ? el.getAttribute("href") : "") ||
+      el.querySelector?.('a[href*="/photo/"]')?.getAttribute?.("href") ||
+      el.closest?.('a[href*="/photo/"]')?.getAttribute?.("href") ||
+      "";
+    if (typeof href === "string" && href.includes("/photo/")) {
+      const mHref = href.match(/\/photo\/([^/?#]+)/);
+      if (mHref && mHref[1]) return mHref[1];
+    }
+    const jsdata =
+      (typeof el.hasAttribute === "function" && el.hasAttribute("jsdata") ? el.getAttribute("jsdata") : "") ||
+      el.querySelector?.("[jsdata]")?.getAttribute?.("jsdata") ||
+      el.closest?.("[jsdata]")?.getAttribute?.("jsdata") ||
+      "";
+    if (typeof jsdata === "string") {
+      const mJs = jsdata.match(/\b(AF1Qip[A-Za-z0-9_-]{20,})\b/);
+      if (mJs && mJs[1]) return mJs[1];
+    }
+    return null;
+  }
+
   function findStackThumbs() {
     if (typeof document === "undefined") return [];
 
@@ -665,7 +720,7 @@
     );
     let thumbs = explicitCandidates.filter(
       (el) =>
-        el.offsetParent !== null &&
+        isThumbVisible(el) &&
         hasThumbVisual(el) &&
         !isInsideInfoPanel(el) &&
         (el.getBoundingClientRect?.().height ?? 80) < 160
@@ -682,7 +737,7 @@
       )
     );
     thumbs = roleCandidates.filter((el) => {
-      if (el.offsetParent === null || !hasThumbVisual(el) || isInsideInfoPanel(el)) return false;
+      if (!isThumbVisible(el) || !hasThumbVisual(el) || isInsideInfoPanel(el)) return false;
       const r = el.getBoundingClientRect?.();
       return !r || ((r.height === undefined || (r.height >= 20 && r.height < 160)) && (r.width === undefined || r.width < 160));
     });
@@ -699,7 +754,7 @@
         strip.querySelectorAll('button, [role="button"], [role="option"], [role="tab"], [role="listitem"], a, [jsaction], [tabindex]')
       ).filter(
         (el) =>
-          el.offsetParent !== null &&
+          isThumbVisible(el) &&
           hasThumbVisual(el) &&
           (el.getBoundingClientRect?.().height ?? 80) < 160
       );
@@ -711,7 +766,7 @@
     const rawVisuals = Array.from(
       document.querySelectorAll('img, [style*="background-image"], button, [role="button"], [role="option"], [role="tab"]')
     ).filter((el) => {
-      if (el.offsetParent === null || isInsideInfoPanel(el) || !hasThumbVisual(el)) return false;
+      if (!isThumbVisible(el) || isInsideInfoPanel(el) || !hasThumbVisual(el)) return false;
       const r = el.getBoundingClientRect?.();
       if (!r || typeof r.top !== "number") return false;
       return (
@@ -851,7 +906,39 @@
       );
     };
 
+    const discoveredStackIds = new Set();
+    const recordObservedPhotoId = (id) => {
+      if (typeof id === "string" && id.trim().length > 0 && id !== "unknown") {
+        discoveredStackIds.add(id.trim());
+      }
+    };
+    const collectDomStackPhotoIds = () => {
+      recordObservedPhotoId(parseCurrentPhotoId());
+      for (const thumb of findStackThumbs()) {
+        const pid = extractThumbPhotoId(thumb);
+        if (pid) recordObservedPhotoId(pid);
+      }
+    };
+    recordObservedPhotoId(options.photoId);
+    collectDomStackPhotoIds();
+
+    const onUserPageActivity = () => {
+      recordObservedPhotoId(parseCurrentPhotoId());
+    };
+    try {
+      if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        window.addEventListener("popstate", onUserPageActivity, true);
+        window.addEventListener("click", onUserPageActivity, true);
+      }
+    } catch (e) {}
+
     const finish = (success, error, errorDetail) => {
+      try {
+        if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+          window.removeEventListener("popstate", onUserPageActivity, true);
+          window.removeEventListener("click", onUserPageActivity, true);
+        }
+      } catch (e) {}
       logFinal(success, error, errorDetail);
       timing.totalMs = Math.round(performance.now() - t0);
       return { success, error, errorDetail, timing };
@@ -866,10 +953,12 @@
 
     // Ensure the main viewer image has mounted/hydrated before checking or toggling the Info panel
     const entryUrlPhotoId = parseCurrentPhotoId();
+    recordObservedPhotoId(entryUrlPhotoId);
     let photoImg = findMainPhotoImage();
     const preHydrateStart = performance.now();
     while (!photoImg && performance.now() - preHydrateStart < 3500) {
       await dom.sleep(150);
+      collectDomStackPhotoIds();
       if (typeof document !== "undefined" && document.querySelector("video")) {
         return finish(false, "skipped_video", "video items are not supported");
       }
@@ -889,10 +978,12 @@
 
     // If Google Photos redirected a Photo Stack URL to its Top Pick during load, give the viewer a brief settle
     if (parseCurrentPhotoId() && entryUrlPhotoId && parseCurrentPhotoId() !== entryUrlPhotoId) {
+      recordObservedPhotoId(parseCurrentPhotoId());
       await dom.sleep(300);
       photoImg = findMainPhotoImage() || photoImg;
     }
     const prePanelUrlPhotoId = parseCurrentPhotoId();
+    recordObservedPhotoId(prePanelUrlPhotoId);
 
     logStep("panel_open_start");
     const panelStart = performance.now();
@@ -906,6 +997,7 @@
     }
     timing.panelOpenMs = Math.round(performance.now() - panelStart);
     logStep("panel_open_success", `${timing.panelOpenMs}ms`);
+    collectDomStackPhotoIds();
 
     const shouldOverwrite = options.overwrite === true || options.overwrite === "yes";
     if (!shouldOverwrite) {
@@ -922,124 +1014,147 @@
       }
     }
 
-    logStep("metadata_fetch_start");
-    const metaStart = performance.now();
-    let metadata = await dom.extractMetadataWithStabilization();
+    const hasPrefilledCaption =
+      typeof options.prefilledCaption === "string" && options.prefilledCaption.trim().length > 0;
+    let metadata = { people: [], untaggedCount: 0, location: null, year: null };
 
-    // If Google Photos redirected the stack URL while opening the panel or fetching metadata, re-verify panel & metadata
-    if (parseCurrentPhotoId() && prePanelUrlPhotoId && parseCurrentPhotoId() !== prePanelUrlPhotoId) {
-      logStep("stack_redirect_settled", `${prePanelUrlPhotoId} -> ${parseCurrentPhotoId()}`);
-      await dom.ensureInfoPanelOpen();
+    if (hasPrefilledCaption) {
+      if (await dom.isInfoPanelReadOnlyUnowned?.()) {
+        logStep("skipped_unowned", "info panel has no editable description field");
+        return finish(false, "skipped_unowned", "photo cannot be edited (not owned by you)");
+      }
+      finalCaption = options.prefilledCaption.trim();
+      timing.metadataMs = 0;
+      timing.generateMs = 0;
+      timing.usedAi = false;
+      logStep("stack_caption_reused", `reusing stack caption (${finalCaption.length} chars)`);
+    } else {
+      logStep("metadata_fetch_start");
+      const metaStart = performance.now();
       metadata = await dom.extractMetadataWithStabilization();
-    }
 
-    timing.metadataMs = Math.round(performance.now() - metaStart);
-    timing.peopleCount = metadata.people.length;
-    timing.hadLocation = metadata.location !== null;
-    logStep(
-      "metadata_fetch_done",
-      `${timing.metadataMs}ms (people=${timing.peopleCount}, location=${timing.hadLocation})`
-    );
-
-    if (await dom.isInfoPanelReadOnlyUnowned?.()) {
-      logStep("skipped_unowned", "info panel has no editable description field");
-      return finish(false, "skipped_unowned", "photo cannot be edited (not owned by you)");
-    }
-
-    if (!shouldOverwrite) {
-      const ta = dom.findVisibleDescriptionTextarea();
-      if (ta && typeof ta.value === "string" && ta.value.trim().length > 0) {
-        return finish(false, "skipped_existing_description", "existing description preserved");
+      // If Google Photos redirected the stack URL while opening the panel or fetching metadata, re-verify panel & metadata
+      if (parseCurrentPhotoId() && prePanelUrlPhotoId && parseCurrentPhotoId() !== prePanelUrlPhotoId) {
+        recordObservedPhotoId(parseCurrentPhotoId());
+        logStep("stack_redirect_settled", `${prePanelUrlPhotoId} -> ${parseCurrentPhotoId()}`);
+        await dom.ensureInfoPanelOpen();
+        metadata = await dom.extractMetadataWithStabilization();
       }
+
+      timing.metadataMs = Math.round(performance.now() - metaStart);
+      timing.peopleCount = metadata.people.length;
+      timing.hadLocation = metadata.location !== null;
+      logStep(
+        "metadata_fetch_done",
+        `${timing.metadataMs}ms (people=${timing.peopleCount}, location=${timing.hadLocation})`
+      );
+
+      if (await dom.isInfoPanelReadOnlyUnowned?.()) {
+        logStep("skipped_unowned", "info panel has no editable description field");
+        return finish(false, "skipped_unowned", "photo cannot be edited (not owned by you)");
+      }
+
+      if (!shouldOverwrite) {
+        const ta = dom.findVisibleDescriptionTextarea();
+        if (ta && typeof ta.value === "string" && ta.value.trim().length > 0) {
+          return finish(false, "skipped_existing_description", "existing description preserved");
+        }
+      }
+
+      // Always refresh photoImg right before generation so stack Top Pick redirects never leave a stale image URL
+      photoImg = findMainPhotoImage() || photoImg;
+      if (!photoImg) {
+        const imgWaitStart = performance.now();
+        while (!photoImg && performance.now() - imgWaitStart < 2500) {
+          await dom.sleep(150);
+          photoImg = findMainPhotoImage();
+        }
+      }
+      logStep("image_found", photoImg ? "ready" : "not_found");
     }
 
-    // Always refresh photoImg right before generation so stack Top Pick redirects never leave a stale image URL
-    photoImg = findMainPhotoImage() || photoImg;
-    if (!photoImg) {
-      const imgWaitStart = performance.now();
-      while (!photoImg && performance.now() - imgWaitStart < 2500) {
-        await dom.sleep(150);
-        photoImg = findMainPhotoImage();
-      }
-    }
-    logStep("image_found", photoImg ? "ready" : "not_found");
     wakeViewerControls();
+    collectDomStackPhotoIds();
     const preGenStackCount = findStackThumbs().length;
 
-    const lang = options.lang || "en";
-    const rulesText = buildRules(metadata, lang);
-    const instrText = buildInstruction(metadata, lang);
+    if (!hasPrefilledCaption) {
+      const lang = options.lang || "en";
+      const rulesText = buildRules(metadata, lang);
+      const instrText = buildInstruction(metadata, lang);
 
-    const genStart = performance.now();
-    let genErrorDetail = null;
+      const genStart = performance.now();
+      let genErrorDetail = null;
 
-    if (options.model === "cloud") {
-      let apiKeyVal = null;
-      try {
-        const stored = await chrome.storage.local.get("geminiApiKey");
-        apiKeyVal = stored?.geminiApiKey;
-      } catch (e) {}
+      if (options.model === "cloud") {
+        let apiKeyVal = null;
+        try {
+          const stored = await chrome.storage.local.get("geminiApiKey");
+          apiKeyVal = stored?.geminiApiKey;
+        } catch (e) {}
 
-      if (!apiKeyVal || typeof apiKeyVal !== "string" || !apiKeyVal.trim()) {
-        genErrorDetail = "missing_gemini_api_key: Please configure your Google AI Studio API key";
+        if (!apiKeyVal || typeof apiKeyVal !== "string" || !apiKeyVal.trim()) {
+          genErrorDetail = "missing_gemini_api_key: Please configure your Google AI Studio API key";
+        } else {
+          const cloudRes = await callGeminiCloud({
+            apiKey: apiKeyVal.trim(),
+            model: "gemini-3.1-flash-lite",
+            rules: rulesText,
+            instruction: instrText,
+            imgSrc: photoImg,
+            lang,
+            onRetry: (attempt, waitMs) => {
+              logStep("cloud_retry_429", `attempt=${attempt} wait=${waitMs}ms`);
+            }
+          });
+          if (cloudRes?.error === "batch_aborted") {
+            return finish(false, "batch_aborted", "cancelled by user");
+          }
+          if (cloudRes && !cloudRes.error && typeof cloudRes.text === "string") {
+            const cleaned = cleanGeneratedCaption(cloudRes.text);
+            if (cleaned.length > 0) {
+              finalCaption = cleaned;
+              timing.usedAi = true;
+            } else {
+              genErrorDetail = "cloud model returned empty caption";
+            }
+          } else {
+            genErrorDetail = cloudRes ? cloudRes.error ?? "empty reply" : "cloud api error";
+          }
+        }
+        timing.generateMs = Math.round(performance.now() - genStart);
+        if (!finalCaption) {
+          return finish(false, "skipped_cloud_error", genErrorDetail || "cloud model failed");
+        }
       } else {
-        const cloudRes = await callGeminiCloud({
-          apiKey: apiKeyVal.trim(),
-          model: "gemini-3.1-flash-lite",
-          rules: rulesText,
-          instruction: instrText,
-          imgSrc: photoImg,
-          lang,
-          onRetry: (attempt, waitMs) => {
-            logStep("cloud_retry_429", `attempt=${attempt} wait=${waitMs}ms`);
-          }
-        });
-        if (cloudRes?.error === "batch_aborted") {
-          return finish(false, "batch_aborted", "cancelled by user");
-        }
-        if (cloudRes && !cloudRes.error && typeof cloudRes.text === "string") {
-          const cleaned = cleanGeneratedCaption(cloudRes.text);
-          if (cleaned.length > 0) {
-            finalCaption = cleaned;
-            timing.usedAi = true;
+        const avail = await probeNanoAvailability();
+        if (avail === "available" && photoImg) {
+          const nanoRes = await sendNanoMessage(
+            { op: "generate", imgSrc: photoImg, rules: rulesText, instruction: instrText },
+            GENERATE_TIMEOUT_MS + 15000
+          );
+          if (nanoRes && !nanoRes.error && typeof nanoRes.text === "string") {
+            const cleaned = cleanGeneratedCaption(nanoRes.text);
+            if (cleaned.length > 0) {
+              finalCaption = cleaned;
+              timing.usedAi = true;
+            } else {
+              genErrorDetail = "local model returned empty caption";
+            }
           } else {
-            genErrorDetail = "cloud model returned empty caption";
+            genErrorDetail = nanoRes ? nanoRes.error ?? "empty reply" : "bridge timeout";
           }
-        } else {
-          genErrorDetail = cloudRes ? cloudRes.error ?? "empty reply" : "cloud api error";
         }
-      }
-      timing.generateMs = Math.round(performance.now() - genStart);
-      if (!finalCaption) {
-        return finish(false, "skipped_cloud_error", genErrorDetail || "cloud model failed");
-      }
-    } else {
-      const avail = await probeNanoAvailability();
-      if (avail === "available" && photoImg) {
-        const nanoRes = await sendNanoMessage(
-          { op: "generate", imgSrc: photoImg, rules: rulesText, instruction: instrText },
-          GENERATE_TIMEOUT_MS + 15000
-        );
-        if (nanoRes && !nanoRes.error && typeof nanoRes.text === "string") {
-          const cleaned = cleanGeneratedCaption(nanoRes.text);
-          if (cleaned.length > 0) {
-            finalCaption = cleaned;
-            timing.usedAi = true;
-          } else {
-            genErrorDetail = "local model returned empty caption";
-          }
-        } else {
-          genErrorDetail = nanoRes ? nanoRes.error ?? "empty reply" : "bridge timeout";
-        }
-      }
-      timing.generateMs = Math.round(performance.now() - genStart);
-      if (finalCaption === null) {
-        finalCaption = composeMetadataCaption(metadata, lang);
+        timing.generateMs = Math.round(performance.now() - genStart);
         if (finalCaption === null) {
-          return finish(false, "skipped_no_metadata", genErrorDetail || "no metadata for fallback");
+          finalCaption = composeMetadataCaption(metadata, lang);
+          if (finalCaption === null) {
+            return finish(false, "skipped_no_metadata", genErrorDetail || "no metadata for fallback");
+          }
         }
       }
     }
+
+    collectDomStackPhotoIds();
 
     if (
       typeof window !== "undefined" &&
@@ -1056,24 +1171,32 @@
       }
     }
 
+    const activeIdBeforePrimary = parseCurrentPhotoId() || options.photoId;
+    recordObservedPhotoId(activeIdBeforePrimary);
+
     const capRes = await dom.runCaption({
       text: finalCaption,
-      overwrite: shouldOverwrite
+      overwrite: shouldOverwrite || hasPrefilledCaption,
+      forceWrite: hasPrefilledCaption
     });
     if (!capRes.success) {
       return finish(false, capRes.error, capRes.errorDetail);
     }
 
-    // Photo stack propagation: apply the same description to all other photos in the stack
-    const extraStackPhotoIds = [];
-    const primaryTaggedId = parseCurrentPhotoId() || options.photoId;
-    if (primaryTaggedId && options.photoId && primaryTaggedId !== options.photoId) {
-      extraStackPhotoIds.push(primaryTaggedId);
+    const primaryTaggedId = parseCurrentPhotoId() || activeIdBeforePrimary || options.photoId;
+    recordObservedPhotoId(primaryTaggedId);
+    const captionedIds = new Set([primaryTaggedId].filter(Boolean));
+    const alreadyDoneSet = new Set([
+      ...captionedIds,
+      ...(Array.isArray(options.alreadyCompletedIds) ? options.alreadyCompletedIds : [])
+    ]);
+    const usedTextareas = new Set();
+    if (capRes.textarea) {
+      usedTextareas.add(capRes.textarea);
     }
-    const visitedStackIds = new Set([primaryTaggedId].filter(Boolean));
 
     try {
-      const isThumbExplicitlySelected = (el) => {
+      const isThumbExplicitlySelected = (el, allThumbs = []) => {
         let cur = el;
         for (let d = 0; d < 3 && cur; d++, cur = cur.parentElement) {
           if (
@@ -1083,6 +1206,26 @@
           ) {
             return true;
           }
+        }
+        if (typeof el.querySelector === "function") {
+          const innerSel = el.querySelector(
+            '[aria-selected="true"], [aria-current="true"], [aria-pressed="true"]'
+          );
+          if (
+            innerSel &&
+            (innerSel.getAttribute?.("aria-selected") === "true" ||
+              innerSel.getAttribute?.("aria-current") === "true" ||
+              innerSel.getAttribute?.("aria-pressed") === "true")
+          ) {
+            return true;
+          }
+        }
+        if (
+          allThumbs.length > 1 &&
+          el.getAttribute?.("tabindex") === "0" &&
+          allThumbs.some((t) => t !== el && t.getAttribute?.("tabindex") === "-1")
+        ) {
+          return true;
         }
         return false;
       };
@@ -1102,6 +1245,7 @@
       }
 
       if (stackThumbs.length > 1) {
+        collectDomStackPhotoIds();
         logStep("stack_detected", `count=${stackThumbs.length} primary=${primaryTaggedId}`);
         for (let idx = 0; idx < stackThumbs.length; idx++) {
           if (
@@ -1122,32 +1266,54 @@
             ) ||
             stackThumbs[idx];
           if (!targetThumb) continue;
-          if (isThumbExplicitlySelected(targetThumb)) continue;
+          if (isThumbExplicitlySelected(targetThumb, curThumbs)) continue;
+
+          const thumbKnownId = extractThumbPhotoId(targetThumb);
+          if (thumbKnownId) {
+            recordObservedPhotoId(thumbKnownId);
+            if (alreadyDoneSet.has(thumbKnownId)) continue;
+          }
 
           const beforeId = parseCurrentPhotoId();
+          const beforeImg = findMainPhotoImage();
           const beforeTa = dom.findVisibleDescriptionTextarea();
+          if (beforeTa) {
+            usedTextareas.add(beforeTa);
+          }
 
           if (dom.triggerDirectDomClick) {
             dom.triggerDirectDomClick(targetThumb);
           } else if (typeof targetThumb.click === "function") {
             targetThumb.click();
           }
-          const innerClickable = targetThumb.querySelector?.('button, [role="button"], a, img');
-          if (innerClickable && innerClickable !== targetThumb) {
-            try {
-              innerClickable.click?.();
-            } catch (e) {}
+          if (parseCurrentPhotoId() === beforeId) {
+            const innerClickable = targetThumb.querySelector?.('button, [role="button"], a');
+            if (innerClickable && innerClickable !== targetThumb && typeof innerClickable.click === "function") {
+              try {
+                innerClickable.click();
+              } catch (e) {}
+            }
           }
 
-          await dom.sleep(300);
-          let subPhotoId = parseCurrentPhotoId();
+          const hasSwitched = () => {
+            const cid = parseCurrentPhotoId();
+            if (cid && cid !== beforeId) return true;
+            if (isThumbExplicitlySelected(targetThumb, findStackThumbs())) return true;
+            const curImg = findMainPhotoImage();
+            if (curImg && beforeImg && curImg !== beforeImg) return true;
+            const newTa = dom.findVisibleDescriptionTextarea({
+              excludeEls: usedTextareas,
+              strictExclude: true
+            });
+            if (newTa && !usedTextareas.has(newTa)) return true;
+            return false;
+          };
+
+          let switched = !!(await dom.waitFor(hasSwitched, 450, 75));
+          let subPhotoId = parseCurrentPhotoId() || thumbKnownId;
 
           // If DOM click did not switch the stack item, dispatch a hardware CDP click at the thumbnail center
-          if (
-            subPhotoId === beforeId &&
-            !isThumbExplicitlySelected(targetThumb) &&
-            typeof targetThumb.getBoundingClientRect === "function"
-          ) {
+          if (!switched && typeof targetThumb.getBoundingClientRect === "function") {
             const r = targetThumb.getBoundingClientRect();
             if (r && r.width > 0 && r.height > 0 && typeof r.left === "number" && typeof r.top === "number") {
               await dom.sendToBackground({
@@ -1155,61 +1321,93 @@
                 x: Math.round(r.left + r.width / 2),
                 y: Math.round(r.top + r.height / 2)
               });
-              await dom.waitFor(
-                () => {
-                  const cid = parseCurrentPhotoId();
-                  return (cid && cid !== beforeId) || isThumbExplicitlySelected(targetThumb);
-                },
-                700,
-                80
-              );
-              subPhotoId = parseCurrentPhotoId();
+              switched = !!(await dom.waitFor(hasSwitched, 700, 80));
+              subPhotoId = parseCurrentPhotoId() || thumbKnownId;
             }
           }
 
-          if (subPhotoId === beforeId && !isThumbExplicitlySelected(targetThumb)) {
-            continue;
-          }
-          if (subPhotoId && visitedStackIds.has(subPhotoId)) {
+          if (!switched && subPhotoId === beforeId) {
             continue;
           }
           if (subPhotoId) {
-            visitedStackIds.add(subPhotoId);
-            if (subPhotoId !== options.photoId && !extraStackPhotoIds.includes(subPhotoId)) {
-              extraStackPhotoIds.push(subPhotoId);
+            recordObservedPhotoId(subPhotoId);
+            if (alreadyDoneSet.has(subPhotoId)) {
+              continue;
             }
           }
 
           logStep("stack_sub_start", `idx=${idx + 1}/${stackThumbs.length} id=${subPhotoId || "unknown"}`);
 
           // Wait briefly for the Info panel textarea to update for the newly selected stack item
-          if (beforeTa) {
+          if (usedTextareas.size > 0) {
             await dom.waitFor(
               () => {
-                const curTa = dom.findVisibleDescriptionTextarea();
-                return !curTa || curTa !== beforeTa || (curTa.value || "").trim() !== finalCaption.trim();
+                const distinctTa = dom.findVisibleDescriptionTextarea({
+                  excludeEls: usedTextareas,
+                  strictExclude: true
+                });
+                if (distinctTa) return distinctTa;
+                const anyTa = dom.findVisibleDescriptionTextarea();
+                if (anyTa && (anyTa.value || "").trim() !== finalCaption.trim()) return anyTa;
+                return null;
               },
-              600,
+              700,
               80
             );
           }
 
           await dom.ensureInfoPanelOpen();
-          const subTa = dom.findVisibleDescriptionTextarea();
+          const subTa =
+            dom.findVisibleDescriptionTextarea({ excludeEls: usedTextareas, strictExclude: true }) ||
+            dom.findVisibleDescriptionTextarea({ excludeEls: usedTextareas });
           const subVal = subTa && typeof subTa.value === "string" ? subTa.value.trim() : "";
-          const hasDifferentExisting = subVal.length > 0 && subVal !== finalCaption.trim();
+          const hasDifferentExisting =
+            subTa && !usedTextareas.has(subTa) && subVal.length > 0 && subVal !== finalCaption.trim();
+
           if (shouldOverwrite || !hasDifferentExisting) {
-            const subCapRes = await dom.runCaption({
+            let subCapRes = await dom.runCaption({
               text: finalCaption,
               overwrite: true,
-              forceWrite: true
+              forceWrite: true,
+              excludeTextareas: usedTextareas
             });
+            if (
+              !subCapRes.success &&
+              !(
+                typeof window !== "undefined" &&
+                typeof window.__wphotoIsBatchAborted === "function" &&
+                window.__wphotoIsBatchAborted()
+              )
+            ) {
+              await dom.sleep(250);
+              await dom.ensureInfoPanelOpen({ forceToggleIfNoTextarea: true });
+              subCapRes = await dom.runCaption({
+                text: finalCaption,
+                overwrite: true,
+                forceWrite: true,
+                excludeTextareas: usedTextareas
+              });
+            }
             logStep(
               "stack_sub_done",
               `idx=${idx + 1}/${stackThumbs.length} id=${subPhotoId || "unknown"} ok=${subCapRes.success}`
             );
+            if (subCapRes.success) {
+              if (subCapRes.textarea) {
+                usedTextareas.add(subCapRes.textarea);
+              }
+              const doneId = parseCurrentPhotoId() || subPhotoId || `stack_idx_${idx}`;
+              if (!doneId.startsWith("stack_idx_")) {
+                recordObservedPhotoId(doneId);
+              }
+              captionedIds.add(doneId);
+              alreadyDoneSet.add(doneId);
+            }
           } else {
             logStep("stack_sub_skipped_existing", `idx=${idx + 1}/${stackThumbs.length} id=${subPhotoId || "unknown"}`);
+            if (subPhotoId) {
+              alreadyDoneSet.add(subPhotoId);
+            }
           }
           await dom.sleep(200);
         }
@@ -1221,10 +1419,27 @@
     timing.blurToSettleMs = capRes.timing.blurToSettleMs;
     timing.retried = capRes.timing.retried;
 
+    const realCaptionedIds = Array.from(captionedIds).filter((id) => !id.startsWith("stack_idx_"));
+    const extraStackPhotoIds =
+      options.photoId && realCaptionedIds.includes(options.photoId)
+        ? realCaptionedIds.filter((id) => id !== options.photoId)
+        : realCaptionedIds.slice(1);
+    const pendingStackIds = Array.from(discoveredStackIds).filter(
+      (id) => !alreadyDoneSet.has(id) && !id.startsWith("stack_idx_")
+    );
+
+    const hasStackMeta = extraStackPhotoIds.length > 0 || pendingStackIds.length > 0;
     return finish(
       true,
       undefined,
-      extraStackPhotoIds.length > 0 ? JSON.stringify({ extraCompletedIds: extraStackPhotoIds }) : undefined
+      hasStackMeta
+        ? JSON.stringify({
+            extraCompletedIds: extraStackPhotoIds,
+            pendingStackIds,
+            captionedIds: realCaptionedIds,
+            sharedCaption: finalCaption
+          })
+        : undefined
     );
   }
 
