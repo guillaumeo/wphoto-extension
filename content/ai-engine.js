@@ -157,6 +157,14 @@
     return text.slice(0, CAPTION_MAX_LENGTH);
   }
 
+  function isBatchAbortedNow() {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.__wphotoIsBatchAborted === "function" &&
+      window.__wphotoIsBatchAborted()
+    );
+  }
+
   let logWriteBusy = false;
   let logPendingLines = [];
 
@@ -171,28 +179,23 @@
         if (handled) return;
         handled = true;
         const prev = (data && data.aiDescriptionVerboseLog) || "";
-        const next = () => {
+        let setDone = false;
+        const finishSet = () => {
+          if (setDone) return;
+          setDone = true;
           logWriteBusy = false;
           if (logPendingLines.length > 0) flushLogQueue();
         };
         try {
-          let setDone = false;
-          const finishSet = () => {
-            if (setDone) return;
-            setDone = true;
-            next();
-          };
           const p = chrome.storage.local.set({ aiDescriptionVerboseLog: prev + batchText }, finishSet);
-          if (p && typeof p.then === "function") {
-            p.then(finishSet).catch(finishSet);
-          }
+          if (p && typeof p.then === "function") p.then(finishSet, finishSet);
         } catch (e) {
-          next();
+          finishSet();
         }
       };
       const g = chrome.storage.local.get("aiDescriptionVerboseLog", onRead);
       if (g && typeof g.then === "function") {
-        g.then(onRead).catch(() => {
+        g.then(onRead, () => {
           logWriteBusy = false;
         });
       }
@@ -391,10 +394,7 @@
 
     const tpl = getPromptConfig(lang);
     const sysInst = tpl.system ? { parts: [{ text: tpl.system }] } : undefined;
-    const isAborted = () =>
-      typeof window !== "undefined" &&
-      typeof window.__wphotoIsBatchAborted === "function" &&
-      window.__wphotoIsBatchAborted();
+    const isAborted = isBatchAbortedNow;
 
     let abortController = null;
     if (typeof AbortController === "function") {
@@ -709,38 +709,38 @@
     return null;
   }
 
+  function filterStackThumbCandidates(nodes, minHeight = 0) {
+    return Array.from(nodes).filter((el) => {
+      if (!isThumbVisible(el) || !hasThumbVisual(el) || isInsideInfoPanel(el)) return false;
+      const r = el.getBoundingClientRect?.();
+      if (!r) return true;
+      const hOk = r.height === undefined || (r.height >= minHeight && r.height < 160);
+      const wOk = minHeight === 0 || r.width === undefined || r.width < 160;
+      return hOk && wOk;
+    });
+  }
+
   function findStackThumbs() {
     if (typeof document === "undefined") return [];
 
     // Strategy 1: Explicit button / role selectors (includes unit-test compatible selector)
-    const explicitCandidates = Array.from(
+    let thumbs = filterStackThumbCandidates(
       document.querySelectorAll(
         'button[aria-label*="Photo "], button[aria-label*="photo "], [role="button"][data-stack-item], button[data-photo-id], [role="listitem"] button'
       )
     );
-    let thumbs = explicitCandidates.filter(
-      (el) =>
-        isThumbVisible(el) &&
-        hasThumbVisual(el) &&
-        !isInsideInfoPanel(el) &&
-        (el.getBoundingClientRect?.().height ?? 80) < 160
-    );
     if (thumbs.length > 1) return thumbs;
 
     // Strategy 2: Expanded role/aria selectors across EN/FR/ES
-    const roleCandidates = Array.from(
+    thumbs = filterStackThumbCandidates(
       document.querySelectorAll(
         '[role="button"][aria-label*="Photo " i], [role="option"][aria-label*="Photo " i], [role="tab"][aria-label*="Photo " i], ' +
           'button[aria-label*="Foto " i], [role="button"][aria-label*="Foto " i], [role="option"][aria-label*="Foto " i], [role="tab"][aria-label*="Foto " i], ' +
           '[aria-label*="Top pick" i], [aria-label*="Meilleure photo" i], [aria-label*="Mejor foto" i], [aria-label*="Mejor toma" i], ' +
           '[data-stack-item], [data-photo-id], [role="listitem"] [role="button"], [role="option"], [role="tab"]'
-      )
+      ),
+      20
     );
-    thumbs = roleCandidates.filter((el) => {
-      if (!isThumbVisible(el) || !hasThumbVisual(el) || isInsideInfoPanel(el)) return false;
-      const r = el.getBoundingClientRect?.();
-      return !r || ((r.height === undefined || (r.height >= 20 && r.height < 160)) && (r.width === undefined || r.width < 160));
-    });
     if (thumbs.length > 1) return thumbs;
 
     // Strategy 3: Strip container selectors
@@ -750,13 +750,10 @@
       )
     ).filter((s) => !isInsideInfoPanel(s));
     for (const strip of strips) {
-      const stripItems = Array.from(
-        strip.querySelectorAll('button, [role="button"], [role="option"], [role="tab"], [role="listitem"], a, [jsaction], [tabindex]')
-      ).filter(
-        (el) =>
-          isThumbVisible(el) &&
-          hasThumbVisual(el) &&
-          (el.getBoundingClientRect?.().height ?? 80) < 160
+      const stripItems = filterStackThumbCandidates(
+        strip.querySelectorAll(
+          'button, [role="button"], [role="option"], [role="tab"], [role="listitem"], a, [jsaction], [tabindex]'
+        )
       );
       if (stripItems.length > 1) return stripItems;
     }
@@ -1000,6 +997,11 @@
     collectDomStackPhotoIds();
 
     const shouldOverwrite = options.overwrite === true || options.overwrite === "yes";
+    const hasExistingDescription = () => {
+      const ta = dom.findVisibleDescriptionTextarea();
+      return Boolean(ta && typeof ta.value === "string" && ta.value.trim().length > 0);
+    };
+
     if (!shouldOverwrite) {
       let ta = dom.findVisibleDescriptionTextarea();
       if (!ta) {
@@ -1009,7 +1011,7 @@
           ta = dom.findVisibleDescriptionTextarea();
         }
       }
-      if (ta && typeof ta.value === "string" && ta.value.trim().length > 0) {
+      if (hasExistingDescription()) {
         return finish(false, "skipped_existing_description", "existing description preserved");
       }
     }
@@ -1054,11 +1056,8 @@
         return finish(false, "skipped_unowned", "photo cannot be edited (not owned by you)");
       }
 
-      if (!shouldOverwrite) {
-        const ta = dom.findVisibleDescriptionTextarea();
-        if (ta && typeof ta.value === "string" && ta.value.trim().length > 0) {
-          return finish(false, "skipped_existing_description", "existing description preserved");
-        }
+      if (!shouldOverwrite && hasExistingDescription()) {
+        return finish(false, "skipped_existing_description", "existing description preserved");
       }
 
       // Always refresh photoImg right before generation so stack Top Pick redirects never leave a stale image URL
@@ -1156,19 +1155,12 @@
 
     collectDomStackPhotoIds();
 
-    if (
-      typeof window !== "undefined" &&
-      typeof window.__wphotoIsBatchAborted === "function" &&
-      window.__wphotoIsBatchAborted()
-    ) {
+    if (isBatchAbortedNow()) {
       return finish(false, "batch_aborted", "cancelled by user");
     }
 
-    if (!shouldOverwrite) {
-      const ta = dom.findVisibleDescriptionTextarea();
-      if (ta && typeof ta.value === "string" && ta.value.trim().length > 0) {
-        return finish(false, "skipped_existing_description", "existing description preserved");
-      }
+    if (!shouldOverwrite && hasExistingDescription()) {
+      return finish(false, "skipped_existing_description", "existing description preserved");
     }
 
     const activeIdBeforePrimary = parseCurrentPhotoId() || options.photoId;
@@ -1248,11 +1240,7 @@
         collectDomStackPhotoIds();
         logStep("stack_detected", `count=${stackThumbs.length} primary=${primaryTaggedId}`);
         for (let idx = 0; idx < stackThumbs.length; idx++) {
-          if (
-            typeof window !== "undefined" &&
-            typeof window.__wphotoIsBatchAborted === "function" &&
-            window.__wphotoIsBatchAborted()
-          ) {
+          if (isBatchAbortedNow()) {
             break;
           }
           wakeViewerControls();
@@ -1371,14 +1359,7 @@
               forceWrite: true,
               excludeTextareas: usedTextareas
             });
-            if (
-              !subCapRes.success &&
-              !(
-                typeof window !== "undefined" &&
-                typeof window.__wphotoIsBatchAborted === "function" &&
-                window.__wphotoIsBatchAborted()
-              )
-            ) {
+            if (!subCapRes.success && !isBatchAbortedNow()) {
               await dom.sleep(250);
               await dom.ensureInfoPanelOpen({ forceToggleIfNoTextarea: true });
               subCapRes = await dom.runCaption({

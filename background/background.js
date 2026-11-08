@@ -33,22 +33,25 @@ function sendDebuggerCommand(tabId, method, params = {}) {
   });
 }
 
+function resolveQuiescenceWait(reason) {
+  if (!pendingQuiescenceWait) return;
+  const wait = pendingQuiescenceWait;
+  pendingQuiescenceWait = null;
+  clearTimeout(wait.ceilingTimer);
+  if (wait.idleTimer) clearTimeout(wait.idleTimer);
+  wait.sendResponse({
+    ok: true,
+    reason,
+    waitMs: Date.now() - wait.startedAt,
+    saveXhrsObserved: wait.saveXhrsObserved
+  });
+}
+
 function resetNetworkState() {
   inFlightRequests.clear();
   ignoredTelemetryIds.clear();
   lastNetworkActivityAt = null;
-  if (pendingQuiescenceWait) {
-    const wait = pendingQuiescenceWait;
-    pendingQuiescenceWait = null;
-    clearTimeout(wait.ceilingTimer);
-    if (wait.idleTimer) clearTimeout(wait.idleTimer);
-    wait.sendResponse({
-      ok: true,
-      reason: "ceiling",
-      waitMs: Date.now() - wait.startedAt,
-      saveXhrsObserved: wait.saveXhrsObserved
-    });
-  }
+  resolveQuiescenceWait("ceiling");
 }
 
 function recordNetworkActivity() {
@@ -64,25 +67,13 @@ function checkQuiescenceIdle() {
   if (inFlightRequests.size > 0) return;
 
   const baseline = Math.max(lastNetworkActivityAt ?? 0, pendingQuiescenceWait.startedAt);
-  const elapsed = Date.now() - baseline;
-  const remaining = pendingQuiescenceWait.idleMs - elapsed;
-
+  const remaining = pendingQuiescenceWait.idleMs - (Date.now() - baseline);
   if (remaining <= 0) {
-    const wait = pendingQuiescenceWait;
-    pendingQuiescenceWait = null;
-    clearTimeout(wait.ceilingTimer);
-    wait.sendResponse({
-      ok: true,
-      reason: "idle",
-      waitMs: Date.now() - wait.startedAt,
-      saveXhrsObserved: wait.saveXhrsObserved
-    });
+    resolveQuiescenceWait("idle");
     return;
   }
 
-  pendingQuiescenceWait.idleTimer = setTimeout(() => {
-    checkQuiescenceIdle();
-  }, remaining);
+  pendingQuiescenceWait.idleTimer = setTimeout(checkQuiescenceIdle, remaining);
 }
 
 try {
@@ -552,19 +543,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           idleMs,
           saveXhrsObserved: seededCount,
           idleTimer: null,
-          ceilingTimer: setTimeout(() => {
-            if (pendingQuiescenceWait) {
-              const wait = pendingQuiescenceWait;
-              pendingQuiescenceWait = null;
-              if (wait.idleTimer) clearTimeout(wait.idleTimer);
-              wait.sendResponse({
-                ok: true,
-                reason: "ceiling",
-                waitMs: Date.now() - wait.startedAt,
-                saveXhrsObserved: wait.saveXhrsObserved
-              });
-            }
-          }, maxWaitMs)
+          ceilingTimer: setTimeout(() => resolveQuiescenceWait("ceiling"), maxWaitMs)
         };
         checkQuiescenceIdle();
         return;

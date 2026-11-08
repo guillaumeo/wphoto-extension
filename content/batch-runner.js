@@ -122,16 +122,20 @@
     }
   }
 
+  async function completeBatchAndReturn(batch) {
+    batch.completedAt = Date.now();
+    await saveActiveBatch(batch);
+    await window.WPhotoDomCaption.sendToBackground({ type: "BATCH_DETACH" });
+    navigateToOrigin(batch.originUrl);
+  }
+
   async function processCurrentPhotoStep(batch, { skipSettle = false } = {}) {
     const myGen = activeRunGeneration;
     const dom = window.WPhotoDomCaption;
     const ai = window.WPhotoAiEngine;
     const idx = getProcessedCount(batch);
     if (idx >= batch.photoIds.length) {
-      batch.completedAt = Date.now();
-      await saveActiveBatch(batch);
-      await dom.sendToBackground({ type: "BATCH_DETACH" });
-      navigateToOrigin(batch.originUrl);
+      await completeBatchAndReturn(batch);
       return;
     }
 
@@ -335,10 +339,7 @@
 
     const nextIdx = getProcessedCount(nextBatch);
     if (nextIdx >= nextBatch.photoIds.length) {
-      nextBatch.completedAt = Date.now();
-      await saveActiveBatch(nextBatch);
-      await dom.sendToBackground({ type: "BATCH_DETACH" });
-      navigateToOrigin(nextBatch.originUrl);
+      await completeBatchAndReturn(nextBatch);
       return;
     }
 
@@ -412,10 +413,7 @@
 
     const idx = getProcessedCount(batch);
     if (idx >= batch.photoIds.length) {
-      batch.completedAt = Date.now();
-      await saveActiveBatch(batch);
-      await window.WPhotoDomCaption.sendToBackground({ type: "BATCH_DETACH" });
-      navigateToOrigin(batch.originUrl);
+      await completeBatchAndReturn(batch);
       return;
     }
 
@@ -424,26 +422,23 @@
     await processCurrentPhotoStep(batch);
   }
 
-  async function pauseBatch() {
+  async function stopBatchWithReason(reason) {
     abortInFlightWork();
     const batch = await loadActiveBatch();
     if (batch && batch.completedAt === null) {
-      batch.lastReason = "paused";
+      batch.lastReason = reason;
       batch.completedAt = Date.now();
       await saveActiveBatch(batch);
       await window.WPhotoDomCaption.sendToBackground({ type: "BATCH_DETACH" });
     }
   }
 
-  async function cancelBatch() {
-    abortInFlightWork();
-    const batch = await loadActiveBatch();
-    if (batch && batch.completedAt === null) {
-      batch.lastReason = "cancelled";
-      batch.completedAt = Date.now();
-      await saveActiveBatch(batch);
-      await window.WPhotoDomCaption.sendToBackground({ type: "BATCH_DETACH" });
-    }
+  function pauseBatch() {
+    return stopBatchWithReason("paused");
+  }
+
+  function cancelBatch() {
+    return stopBatchWithReason("cancelled");
   }
 
   async function resumeBatch() {
@@ -453,10 +448,7 @@
     const idx = getProcessedCount(batch);
     if (idx >= batch.photoIds.length) {
       batch.lastReason = null;
-      batch.completedAt = Date.now();
-      await saveActiveBatch(batch);
-      await window.WPhotoDomCaption.sendToBackground({ type: "BATCH_DETACH" });
-      navigateToOrigin(batch.originUrl);
+      await completeBatchAndReturn(batch);
       return;
     }
 

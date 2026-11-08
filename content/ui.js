@@ -264,17 +264,8 @@
     }, 2500);
   }
 
-  async function clearGeminiApiKey() {
-    try {
-      await chrome.storage.local.remove("geminiApiKey");
-    } catch (e) {}
-    state.apiKey = "";
-    state.apiKeyStatusKey = "keyCleared";
-    renderMenu();
-    setTimeout(() => {
-      state.apiKeyStatusKey = "";
-      if (state.menuOpen) renderMenu();
-    }, 2500);
+  function clearGeminiApiKey() {
+    return saveGeminiApiKey("");
   }
 
   function getCtaLabel(lang, summary) {
@@ -479,6 +470,41 @@
     }
   }
 
+  function createActionBtn(label, className, onClick) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = className;
+    btn.textContent = label;
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function createSegmentedControl(options, activeValue, onSelect, ariaLabel) {
+    const group = document.createElement("div");
+    group.className = "wphoto-segmented";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", ariaLabel);
+
+    for (const opt of options) {
+      const btn = createActionBtn(opt.label, "wphoto-seg-btn", () => onSelect(opt.value));
+      btn.setAttribute("aria-pressed", String(opt.value === activeValue));
+      group.appendChild(btn);
+    }
+    return group;
+  }
+
+  function createLabeledSegmentedField(attrName, labelText, options, activeVal, onSelect) {
+    const field = document.createElement("div");
+    field.className = "wphoto-field";
+    field.setAttribute(attrName, "true");
+    const label = document.createElement("span");
+    label.className = "wphoto-label";
+    label.textContent = labelText;
+    field.appendChild(label);
+    field.appendChild(createSegmentedControl(options, activeVal, onSelect, labelText));
+    return field;
+  }
+
   function renderApiKeyView(card) {
     const t = getUiStrings(state.lang);
     const header = document.createElement("div");
@@ -488,17 +514,13 @@
     title.className = "wphoto-title";
     title.textContent = t.apiKeyTitle;
 
-    const backBtn = document.createElement("button");
-    backBtn.type = "button";
-    backBtn.className = "wphoto-text-btn";
-    backBtn.textContent = t.backBtn;
-    backBtn.addEventListener("click", () => {
-      state.view = "main";
-      renderMenu();
-    });
-
     header.appendChild(title);
-    header.appendChild(backBtn);
+    header.appendChild(
+      createActionBtn(t.backBtn, "wphoto-text-btn", () => {
+        state.view = "main";
+        renderMenu();
+      })
+    );
     card.appendChild(header);
 
     const helper = document.createElement("div");
@@ -524,18 +546,18 @@
     input.value = state.apiKey;
     input.setAttribute("aria-label", t.apiKeyInputAria);
 
-    const toggleShowBtn = document.createElement("button");
-    toggleShowBtn.type = "button";
-    toggleShowBtn.className = "wphoto-text-btn";
-    toggleShowBtn.textContent = state.showApiKeyPlain ? t.hideBtn : t.showBtn;
-    toggleShowBtn.addEventListener("click", () => {
-      state.showApiKeyPlain = !state.showApiKeyPlain;
-      state.apiKey = input.value;
-      renderMenu();
-    });
-
     inputRow.appendChild(input);
-    inputRow.appendChild(toggleShowBtn);
+    inputRow.appendChild(
+      createActionBtn(
+        state.showApiKeyPlain ? t.hideBtn : t.showBtn,
+        "wphoto-text-btn",
+        () => {
+          state.showApiKeyPlain = !state.showApiKeyPlain;
+          state.apiKey = input.value;
+          renderMenu();
+        }
+      )
+    );
     card.appendChild(inputRow);
 
     if (state.apiKeyStatusKey && t[state.apiKeyStatusKey]) {
@@ -550,45 +572,19 @@
     const actions = document.createElement("div");
     actions.className = "wphoto-actions-row";
 
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "wphoto-primary-btn";
+    const saveBtn = createActionBtn(t.saveKeyBtn, "wphoto-primary-btn", () =>
+      saveGeminiApiKey(input.value)
+    );
     saveBtn.style.flex = "1";
-    saveBtn.textContent = t.saveKeyBtn;
-    saveBtn.addEventListener("click", () => {
-      saveGeminiApiKey(input.value);
-    });
-
-    const clearBtn = document.createElement("button");
-    clearBtn.type = "button";
-    clearBtn.className = "wphoto-text-btn";
-    clearBtn.textContent = t.clearBtn;
-    clearBtn.addEventListener("click", () => {
-      input.value = "";
-      clearGeminiApiKey();
-    });
 
     actions.appendChild(saveBtn);
-    actions.appendChild(clearBtn);
+    actions.appendChild(
+      createActionBtn(t.clearBtn, "wphoto-text-btn", () => {
+        input.value = "";
+        clearGeminiApiKey();
+      })
+    );
     card.appendChild(actions);
-  }
-
-  function createSegmentedControl(options, activeValue, onSelect, ariaLabel) {
-    const group = document.createElement("div");
-    group.className = "wphoto-segmented";
-    group.setAttribute("role", "group");
-    group.setAttribute("aria-label", ariaLabel);
-
-    for (const opt of options) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "wphoto-seg-btn";
-      btn.textContent = opt.label;
-      btn.setAttribute("aria-pressed", String(opt.value === activeValue));
-      btn.addEventListener("click", () => onSelect(opt.value));
-      group.appendChild(btn);
-    }
-    return group;
   }
 
   function renderMainView(card) {
@@ -602,17 +598,13 @@
     title.className = "wphoto-title";
     title.textContent = "AI Plus";
 
-    const apiKeyBtn = document.createElement("button");
-    apiKeyBtn.type = "button";
-    apiKeyBtn.className = "wphoto-text-btn";
-    apiKeyBtn.textContent = state.apiKey ? t.apiKeySetBtn : t.apiKeyBtn;
-    apiKeyBtn.addEventListener("click", () => {
-      state.view = "apikey";
-      renderMenu();
-    });
-
     header.appendChild(title);
-    header.appendChild(apiKeyBtn);
+    header.appendChild(
+      createActionBtn(state.apiKey ? t.apiKeySetBtn : t.apiKeyBtn, "wphoto-text-btn", () => {
+        state.view = "apikey";
+        renderMenu();
+      })
+    );
     card.appendChild(header);
 
     // 1. Language selector (dynamically built from window.WPHOTO_PROMPTS)
@@ -622,15 +614,10 @@
       label: cfg.label || code.toUpperCase()
     }));
 
-    const langField = document.createElement("div");
-    langField.className = "wphoto-field";
-    langField.setAttribute("data-wphoto-lang-toggle", "true");
-    const langLabel = document.createElement("span");
-    langLabel.className = "wphoto-label";
-    langLabel.textContent = t.languageLabel;
-    langField.appendChild(langLabel);
-    langField.appendChild(
-      createSegmentedControl(
+    card.appendChild(
+      createLabeledSegmentedField(
+        "data-wphoto-lang-toggle",
+        t.languageLabel,
         langOptions,
         state.lang,
         (val) => {
@@ -638,22 +625,15 @@
           saveStoredPrefs();
           renderMenu();
           renderStatusBar();
-        },
-        t.languageLabel
+        }
       )
     );
-    card.appendChild(langField);
 
     // 2. Model selector (Cloud vs Local)
-    const modelField = document.createElement("div");
-    modelField.className = "wphoto-field";
-    modelField.setAttribute("data-wphoto-model-toggle", "true");
-    const modelLabel = document.createElement("span");
-    modelLabel.className = "wphoto-label";
-    modelLabel.textContent = t.modelLabel;
-    modelField.appendChild(modelLabel);
-    modelField.appendChild(
-      createSegmentedControl(
+    card.appendChild(
+      createLabeledSegmentedField(
+        "data-wphoto-model-toggle",
+        t.modelLabel,
         [
           { value: "cloud", label: t.modelCloud },
           { value: "local", label: t.modelLocal }
@@ -664,11 +644,9 @@
           saveStoredPrefs();
           if (val === "local") triggerLocalProbe();
           else renderMenu();
-        },
-        t.modelLabel
+        }
       )
     );
-    card.appendChild(modelField);
 
     if (state.model === "local") {
       const localNote = document.createElement("div");
@@ -677,12 +655,9 @@
         localNote.textContent = t.localReady;
       } else if (state.nanoStatus === "downloadable") {
         localNote.textContent = t.localDownloadNeeded;
-        const dlBtn = document.createElement("button");
-        dlBtn.type = "button";
-        dlBtn.className = "wphoto-link-btn";
-        dlBtn.textContent = t.downloadModelBtn;
-        dlBtn.addEventListener("click", handleDownloadLocalModel);
-        localNote.appendChild(dlBtn);
+        localNote.appendChild(
+          createActionBtn(t.downloadModelBtn, "wphoto-link-btn", handleDownloadLocalModel)
+        );
       } else if (state.nanoStatus === "downloading") {
         localNote.textContent = t.localDownloading(state.nanoProgressPct);
       } else {
@@ -693,28 +668,20 @@
       const keyWarning = document.createElement("div");
       keyWarning.className = "wphoto-note";
       keyWarning.textContent = t.cloudNeedsKey;
-      const setKeyLink = document.createElement("button");
-      setKeyLink.type = "button";
-      setKeyLink.className = "wphoto-link-btn";
-      setKeyLink.textContent = t.setApiKeyBtn;
-      setKeyLink.addEventListener("click", () => {
-        state.view = "apikey";
-        renderMenu();
-      });
-      keyWarning.appendChild(setKeyLink);
+      keyWarning.appendChild(
+        createActionBtn(t.setApiKeyBtn, "wphoto-link-btn", () => {
+          state.view = "apikey";
+          renderMenu();
+        })
+      );
       card.appendChild(keyWarning);
     }
 
     // 3. Overwrite existing descriptions (No | Yes)
-    const overwriteField = document.createElement("div");
-    overwriteField.className = "wphoto-field";
-    overwriteField.setAttribute("data-wphoto-overwrite-toggle", "true");
-    const overwriteLabel = document.createElement("span");
-    overwriteLabel.className = "wphoto-label";
-    overwriteLabel.textContent = t.overwriteLabel;
-    overwriteField.appendChild(overwriteLabel);
-    overwriteField.appendChild(
-      createSegmentedControl(
+    card.appendChild(
+      createLabeledSegmentedField(
+        "data-wphoto-overwrite-toggle",
+        t.overwriteLabel,
         [
           { value: "no", label: t.no },
           { value: "yes", label: t.yes }
@@ -724,11 +691,9 @@
           state.overwrite = val;
           saveStoredPrefs();
           renderMenu();
-        },
-        t.overwriteLabel
+        }
       )
     );
-    card.appendChild(overwriteField);
 
     // 4. Verbose log checkbox + Download log button
     const verboseRow = document.createElement("div");
@@ -757,25 +722,22 @@
     verboseRow.appendChild(checkLabel);
 
     if (state.verbose) {
-      const dlLogBtn = document.createElement("button");
-      dlLogBtn.type = "button";
-      dlLogBtn.className = "wphoto-link-btn";
-      dlLogBtn.textContent = t.downloadLog;
-      dlLogBtn.addEventListener("click", handleDownloadLog);
-      verboseRow.appendChild(dlLogBtn);
+      verboseRow.appendChild(
+        createActionBtn(t.downloadLog, "wphoto-link-btn", handleDownloadLog)
+      );
     }
     card.appendChild(verboseRow);
 
     // 5. Primary CTA Button
     const summary = window.WPhotoSelection.getSummary();
     const canStart = summary.eligible > 0 || summary.inAlbum;
-    const primaryBtn = document.createElement("button");
-    primaryBtn.type = "button";
-    primaryBtn.className = "wphoto-primary-btn";
+    const primaryBtn = createActionBtn(
+      getCtaLabel(state.lang, summary),
+      "wphoto-primary-btn",
+      handleStartBatch
+    );
     primaryBtn.setAttribute("data-wphoto-primary-cta", "true");
     primaryBtn.disabled = !canStart || state.enumeratingAlbum;
-    primaryBtn.textContent = getCtaLabel(state.lang, summary);
-    primaryBtn.addEventListener("click", handleStartBatch);
     card.appendChild(primaryBtn);
   }
 
@@ -825,43 +787,30 @@
     bar.appendChild(textSpan);
 
     if (isRunning) {
-      const pauseBtn = document.createElement("button");
-      pauseBtn.type = "button";
-      pauseBtn.className = "wphoto-text-btn";
-      pauseBtn.textContent = t.pauseBtn;
-      pauseBtn.addEventListener("click", () => window.WPhotoBatchRunner.pauseBatch());
-      bar.appendChild(pauseBtn);
-
-      const cancelBtn = document.createElement("button");
-      cancelBtn.type = "button";
-      cancelBtn.className = "wphoto-text-btn";
-      cancelBtn.textContent = t.cancelBtn;
-      cancelBtn.addEventListener("click", () => window.WPhotoBatchRunner.cancelBatch());
-      bar.appendChild(cancelBtn);
+      bar.appendChild(
+        createActionBtn(t.pauseBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.pauseBatch())
+      );
+      bar.appendChild(
+        createActionBtn(t.cancelBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.cancelBatch())
+      );
     } else if (isPaused) {
-      const resumeBtn = document.createElement("button");
-      resumeBtn.type = "button";
-      resumeBtn.className = "wphoto-text-btn";
-      resumeBtn.textContent = t.resumeBtn;
-      resumeBtn.addEventListener("click", () => window.WPhotoBatchRunner.resumeBatch());
-      bar.appendChild(resumeBtn);
-
-      const cancelBtn = document.createElement("button");
-      cancelBtn.type = "button";
-      cancelBtn.className = "wphoto-text-btn";
-      cancelBtn.textContent = t.cancelBtn;
-      cancelBtn.addEventListener("click", () => window.WPhotoBatchRunner.clearActiveBatch());
-      bar.appendChild(cancelBtn);
+      bar.appendChild(
+        createActionBtn(t.resumeBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.resumeBatch())
+      );
+      bar.appendChild(
+        createActionBtn(t.cancelBtn, "wphoto-text-btn", () =>
+          window.WPhotoBatchRunner.clearActiveBatch()
+        )
+      );
     } else {
       if (state.menuOpen) {
         closeMenu();
       }
-      const closeBtn = document.createElement("button");
-      closeBtn.type = "button";
-      closeBtn.className = "wphoto-text-btn";
-      closeBtn.textContent = t.dismissBtn;
-      closeBtn.addEventListener("click", () => window.WPhotoBatchRunner.clearActiveBatch());
-      bar.appendChild(closeBtn);
+      bar.appendChild(
+        createActionBtn(t.dismissBtn, "wphoto-text-btn", () =>
+          window.WPhotoBatchRunner.clearActiveBatch()
+        )
+      );
 
       const ageMs = typeof batch.completedAt === "number" ? Math.max(0, Date.now() - batch.completedAt) : 0;
       const delayMs = Math.max(500, STATUS_BAR_AUTO_DISMISS_MS - ageMs);
@@ -1114,13 +1063,17 @@
     applyThemeAttr(btn);
     btn.setAttribute("aria-expanded", String(state.menuOpen));
 
+    const resetInlinePos = () => {
+      btn.style.position = "";
+      btn.style.top = "";
+    };
+
     // 1. Selection bar placement (leftmost item of the right-side selection action cluster)
     const selContainer = findSelectionActionContainer();
     if (selContainer) {
       btn.removeAttribute("data-pinned");
       btn.setAttribute("data-placement", "selection");
-      btn.style.position = "";
-      btn.style.top = "";
+      resetInlinePos();
       if (btn.parentElement !== selContainer || btn.previousElementSibling !== null) {
         selContainer.insertBefore(btn, selContainer.firstChild);
       }
@@ -1133,8 +1086,7 @@
     if (anchor && anchor.parentElement) {
       btn.removeAttribute("data-pinned");
       if (!isAdjacentToAnchor(btn, anchor)) {
-        btn.style.position = "";
-        btn.style.top = "";
+        resetInlinePos();
         insertBeforeTopBarAnchor(btn, anchor);
       }
       if (isMountedInValidTopBarPosition(btn)) {
@@ -1147,8 +1099,7 @@
     const flexBar = findHomeFlexHeaderBar();
     if (flexBar) {
       btn.removeAttribute("data-pinned");
-      btn.style.position = "";
-      btn.style.top = "";
+      resetInlinePos();
       if (btn.parentElement !== flexBar) {
         flexBar.appendChild(btn);
       }
@@ -1159,8 +1110,7 @@
 
     // 4. Final fallback: pinned top-right header placement
     btn.setAttribute("data-pinned", "true");
-    btn.style.position = "";
-    btn.style.top = "";
+    resetInlinePos();
     if (btn.parentElement !== document.body) {
       document.body.appendChild(btn);
     }

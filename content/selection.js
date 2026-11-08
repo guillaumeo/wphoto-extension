@@ -54,10 +54,7 @@
 
   function resolveMediaId(checkboxOrTile) {
     const link = findTileLink(checkboxOrTile);
-    if (!link) return null;
-    const href = link.getAttribute("href") || "";
-    const match = href.match(/\/photo\/([^/?#]+)/);
-    return match ? match[1] : null;
+    return link ? parsePhotoIdFromPath(link.getAttribute("href") || "") : null;
   }
 
   function tileHasDurationBadge(checkboxOrTile) {
@@ -188,13 +185,20 @@
     }
     const viewerActorId = resolveViewerActorId();
     const ds7Marker = "AF_initDataCallback({key: 'ds:7'";
-    const scripts = Array.from(document.querySelectorAll("script"));
+    const allScripts = Array.from(document.querySelectorAll("script"));
+    const orderedScripts = [
+      ...allScripts.filter((s) => (s.textContent || "").includes(ds7Marker)),
+      ...allScripts.filter((s) => {
+        const t = s.textContent || "";
+        return t.includes("AF_initDataCallback") && !t.includes(ds7Marker);
+      })
+    ];
 
-    for (const script of scripts) {
+    for (const script of orderedScripts) {
       const text = script.textContent || "";
-      const ds7Idx = text.indexOf(ds7Marker);
-      if (ds7Idx < 0) continue;
-      const pos = text.indexOf(`"${mediaId}"`, ds7Idx);
+      const isDs7 = text.includes(ds7Marker);
+      const startIdx = isDs7 ? text.indexOf(ds7Marker) : 0;
+      const pos = text.indexOf(`"${mediaId}"`, startIdx);
       if (pos < 0) continue;
       const slice = text.slice(pos + mediaId.length + 2, pos + 2500);
       const owned = evaluateSliceOwnership(slice, viewerActorId);
@@ -202,21 +206,10 @@
         rpcOwnershipCache.set(mediaId, owned);
         return owned;
       }
-      const fallback = /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
-      rpcOwnershipCache.set(mediaId, fallback);
-      return fallback;
-    }
-
-    for (const script of scripts) {
-      const text = script.textContent || "";
-      if (!text.includes("AF_initDataCallback")) continue;
-      const pos = text.indexOf(`"${mediaId}"`);
-      if (pos < 0) continue;
-      const slice = text.slice(pos + mediaId.length + 2, pos + 2500);
-      const owned = evaluateSliceOwnership(slice, viewerActorId);
-      if (owned !== null) {
-        rpcOwnershipCache.set(mediaId, owned);
-        return owned;
+      if (isDs7) {
+        const fallback = /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
+        rpcOwnershipCache.set(mediaId, fallback);
+        return fallback;
       }
     }
     return null;
@@ -227,9 +220,7 @@
       return null;
     }
     for (const link of Array.from(document.querySelectorAll('a[href*="/photo/"]'))) {
-      const href = link.getAttribute?.("href") || "";
-      const m = href.match(/\/photo\/([^/?#]+)/);
-      if (m && m[1] === mediaId) {
+      if (parsePhotoIdFromPath(link.getAttribute?.("href") || "") === mediaId) {
         return link;
       }
     }
@@ -368,20 +359,20 @@
     return Array.from(selectedRegistry.values()).sort((a, b) => a.order - b.order);
   }
 
-  function getEligibleIds() {
+  function getIdsByEligibility(wantEligible) {
     if (parsePhotoIdFromPath()) return [];
     scanVisibleCheckboxes();
     return sortedEntries()
-      .filter((item) => item.classification === "eligible")
+      .filter((item) => (item.classification === "eligible") === wantEligible)
       .map((item) => item.id);
   }
 
+  function getEligibleIds() {
+    return getIdsByEligibility(true);
+  }
+
   function getSkippedIds() {
-    if (parsePhotoIdFromPath()) return [];
-    scanVisibleCheckboxes();
-    return sortedEntries()
-      .filter((item) => item.classification !== "eligible")
-      .map((item) => item.id);
+    return getIdsByEligibility(false);
   }
 
   function getSummary() {
@@ -528,11 +519,8 @@
       const links = document.querySelectorAll('a[href*="/photo/"]');
       for (const link of links) {
         if (link.offsetParent === null) continue;
-        const href = link.getAttribute("href") || "";
-        const m = href.match(/\/photo\/([^/?#]+)/);
-        if (!m) continue;
-        const id = m[1];
-        if (seen.has(id)) continue;
+        const id = parsePhotoIdFromPath(link.getAttribute("href") || "");
+        if (!id || seen.has(id)) continue;
         seen.add(id);
         const label = link.getAttribute("aria-label") || "";
         const cls = classifyAriaLabel(label, link);
