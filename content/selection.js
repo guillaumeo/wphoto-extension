@@ -4,11 +4,31 @@
 (function () {
   const DURATION_REGEX = /^\p{Nd}{1,2}:\p{Nd}{2}$/u;
   const ACCOUNT_PREFIX_REGEX = /^\/(u\/\d+)\//;
+  const VIDEO_LABEL_RE = /(?:^| - )(?:Video|Vidéo|Vídeo|Animation|Animación) - /;
+  const PHOTO_LABEL_RE = /(?:^| - )(?:Photo|Foto|Burst photo|Raw photo) - /;
+  const ACTOR_SLICE_RE = /\["(AF1Qip[A-Za-z0-9_\-]{20,})"\]/;
+  const VIEWER_LIB_RE = /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/;
+  const RPC_TIMEOUT_MS = 15000;
   const selectedRegistry = new Map();
   let selectionOrderCounter = 0;
   let lastPathKey = "";
   let lastFullPathname = "";
   const changeListeners = new Set();
+
+  let cachedViewerAccountName = null;
+  let cachedViewerGaiaId = null;
+  let cachedViewerActorId = null;
+  const rpcOwnershipCache = new Map();
+
+  const getScripts = () =>
+    typeof document !== "undefined" && typeof document.querySelectorAll === "function"
+      ? Array.from(document.querySelectorAll("script"))
+      : [];
+
+  const getPhotoLinks = () =>
+    typeof document !== "undefined" && typeof document.querySelectorAll === "function"
+      ? Array.from(document.querySelectorAll('a[href*="/photo/"]'))
+      : [];
 
   function notifyListeners() {
     for (const fn of changeListeners) {
@@ -24,14 +44,12 @@
   }
 
   function buildPhotoUrl(pathname, photoId) {
-    const prefix = getAccountPathPrefix(pathname);
-    return `https://photos.google.com${prefix}/photo/${photoId}`;
+    return `https://photos.google.com${getAccountPathPrefix(pathname)}/photo/${photoId}`;
   }
 
   function parsePhotoIdFromPath(pathname = location.pathname) {
     if (typeof pathname !== "string") return null;
-    const match = pathname.match(/\/photo\/([^/?#]+)/);
-    return match ? match[1] : null;
+    return pathname.match(/\/photo\/([^/?#]+)/)?.[1] || null;
   }
 
   function isAlbumPage(pathname = location.pathname) {
@@ -40,9 +58,7 @@
 
   function findTileLink(el) {
     if (!el) return null;
-    if (typeof el.getAttribute === "function" && (el.getAttribute("href") || "").includes("/photo/")) {
-      return el;
-    }
+    if (typeof el.getAttribute === "function" && (el.getAttribute("href") || "").includes("/photo/")) return el;
     let cur = el;
     for (let i = 0; i < 6 && cur; i++) {
       const link = cur.querySelector?.('a[href*="/photo/"]');
@@ -54,49 +70,28 @@
 
   function resolveMediaId(checkboxOrTile) {
     const link = findTileLink(checkboxOrTile);
-    return link ? parsePhotoIdFromPath(link.getAttribute("href") || "") : null;
+    return link ? parsePhotoIdFromPath(link.getAttribute?.("href") || "") : null;
   }
 
   function tileHasDurationBadge(checkboxOrTile) {
-    const link = findTileLink(checkboxOrTile);
-    const container = link?.parentElement;
+    const container = findTileLink(checkboxOrTile)?.parentElement;
     if (!container) return false;
     for (const node of container.querySelectorAll("div, span")) {
-      if (node.children.length === 0 && DURATION_REGEX.test((node.textContent || "").trim())) {
-        return true;
-      }
+      if (node.children.length === 0 && DURATION_REGEX.test((node.textContent || "").trim())) return true;
     }
     return false;
   }
 
-  let cachedViewerAccountName = null;
-  const rpcOwnershipCache = new Map();
-
   function resolveViewerAccountName() {
     if (cachedViewerAccountName !== null) return cachedViewerAccountName;
-    if (typeof document === "undefined" || typeof document.querySelector !== "function") return null;
-    const accBtn = document.querySelector(
-      'a[role="button"][aria-label*="Google Account:"], button[aria-label*="Google Account:"], a[role="button"][aria-label*="Compte Google"], button[aria-label*="Compte Google"], a[role="button"][aria-label*="Cuenta de Google"], button[aria-label*="Cuenta de Google"]'
-    );
-    if (accBtn) {
-      const label = accBtn.getAttribute?.("aria-label") || "";
-      const m = label.match(/(?:Google Account|Compte Google|Cuenta de Google)\s*:\s*([^(\n]+)/i);
-      const name = m?.[1]?.trim();
-      if (name) {
-        cachedViewerAccountName = name;
-        return name;
-      }
-    }
-    if (typeof document.querySelectorAll === "function") {
-      for (const el of Array.from(document.querySelectorAll('a[role="button"][aria-label], button[aria-label]'))) {
-        const label = el.getAttribute?.("aria-label") || "";
-        if (!/\([^()\s]+@[^()\s]+\)/.test(label)) continue;
-        const m = label.match(/:\s*([^(\n]+?)\s*(?:\n|\()/);
-        const name = m?.[1]?.trim();
-        if (name) {
-          cachedViewerAccountName = name;
-          return name;
-        }
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return null;
+    for (const el of Array.from(document.querySelectorAll('a[role="button"][aria-label], button[aria-label]'))) {
+      const label = el.getAttribute?.("aria-label") || "";
+      const direct = label.match(/(?:Google Account|Compte Google|Cuenta de Google)\s*:\s*([^(\n]+)/i)?.[1]?.trim();
+      if (direct) return (cachedViewerAccountName = direct);
+      if (/\([^()\s]+@[^()\s]+\)/.test(label)) {
+        const emailLabel = label.match(/:\s*([^(\n]+?)\s*(?:\n|\()/)?.[1]?.trim();
+        if (emailLabel) return (cachedViewerAccountName = emailLabel);
       }
     }
     return null;
@@ -107,11 +102,9 @@
     const container = link?.parentElement;
     if (!container || typeof container.querySelectorAll !== "function") return null;
     for (const node of Array.from(container.querySelectorAll("div, span"))) {
-      if ((node.children && node.children.length > 0) || link.contains?.(node)) continue;
+      if (node.children?.length > 0 || link.contains?.(node)) continue;
       const text = (node.textContent || "").trim();
-      if (text.length >= 2 && text.length <= 50 && /\p{L}/u.test(text) && !/\p{Nd}/u.test(text)) {
-        return text;
-      }
+      if (text.length >= 2 && text.length <= 50 && /\p{L}/u.test(text) && !/\p{Nd}/u.test(text)) return text;
     }
     return null;
   }
@@ -120,56 +113,46 @@
     if (!tileOwner || !viewerName) return true;
     const a = tileOwner.trim().toLowerCase();
     const b = viewerName.trim().toLowerCase();
-    if (a === b) return true;
-    if (b.startsWith(a + " ") || a.startsWith(b + " ")) return true;
-    return false;
+    return a === b || b.startsWith(a + " ") || a.startsWith(b + " ");
+  }
+
+  function findInScripts(regex) {
+    for (const script of getScripts()) {
+      const m = regex.exec(script.textContent || "");
+      if (m) return m[1];
+    }
+    return null;
   }
 
   function resolveViewerGaiaId() {
-    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return null;
-    const gaiaRegex = /"S06Grb":"(\d{15,25})"/;
-    for (const script of Array.from(document.querySelectorAll("script"))) {
-      const text = script.textContent || "";
-      const m = gaiaRegex.exec(text);
-      if (m) return m[1];
-    }
-    return null;
+    if (cachedViewerGaiaId !== null) return cachedViewerGaiaId;
+    const gaiaId = findInScripts(/"S06Grb":"(\d{15,25})"/);
+    if (gaiaId) cachedViewerGaiaId = gaiaId;
+    return cachedViewerGaiaId;
   }
 
   function resolveViewerActorId(extraText = "") {
+    if (cachedViewerActorId !== null) return cachedViewerActorId;
     const gaiaId = resolveViewerGaiaId();
     if (!gaiaId) return null;
-    const escapedGaia = gaiaId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pairRegex = new RegExp(`"(AF1Qip[A-Za-z0-9_\\-]{20,})","${escapedGaia}"`);
-    if (extraText) {
-      const m = pairRegex.exec(extraText);
-      if (m) return m[1];
-    }
-    if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
-      for (const script of Array.from(document.querySelectorAll("script"))) {
-        const text = script.textContent || "";
-        const m = pairRegex.exec(text);
-        if (m) return m[1];
-      }
-    }
-    return null;
+    const pairRe = new RegExp(`"(AF1Qip[A-Za-z0-9_\\-]{20,})","${gaiaId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`);
+    const hit = (extraText && pairRe.exec(extraText)?.[1]) || findInScripts(pairRe);
+    if (hit) cachedViewerActorId = hit;
+    return cachedViewerActorId;
   }
 
   function evaluateSliceOwnership(slice, viewerActorId = null) {
     if (!slice || typeof slice !== "string") return null;
-    const actorMatch = /\["(AF1Qip[A-Za-z0-9_\-]{20,})"\]/.exec(slice);
+    const actorMatch = ACTOR_SLICE_RE.exec(slice);
     if (!actorMatch) return null;
-    const inViewerLibrary = /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
-    if (!inViewerLibrary) return false;
-    if (viewerActorId && actorMatch[1] !== viewerActorId) return false;
-    return true;
+    if (!VIEWER_LIB_RE.test(slice)) return false;
+    return !(viewerActorId && actorMatch[1] !== viewerActorId);
   }
 
   function isSnAcKcRowOwnedByViewer(row, viewerActorId = null) {
     if (!Array.isArray(row) || row.length < 2) return null;
     try {
-      const rowTail = JSON.stringify(row.slice(1));
-      return evaluateSliceOwnership(rowTail, viewerActorId);
+      return evaluateSliceOwnership(JSON.stringify(row.slice(1)), viewerActorId);
     } catch (e) {
       return null;
     }
@@ -177,51 +160,28 @@
 
   function isOwnedByViewerInScripts(mediaId) {
     if (!mediaId) return null;
-    if (rpcOwnershipCache.has(mediaId)) {
-      return rpcOwnershipCache.get(mediaId);
-    }
-    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
-      return null;
-    }
+    if (rpcOwnershipCache.has(mediaId)) return rpcOwnershipCache.get(mediaId);
+    const scripts = getScripts();
+    if (scripts.length === 0) return null;
+
     const viewerActorId = resolveViewerActorId();
     const ds7Marker = "AF_initDataCallback({key: 'ds:7'";
-    const allScripts = Array.from(document.querySelectorAll("script"));
-    const orderedScripts = [
-      ...allScripts.filter((s) => (s.textContent || "").includes(ds7Marker)),
-      ...allScripts.filter((s) => {
-        const t = s.textContent || "";
-        return t.includes("AF_initDataCallback") && !t.includes(ds7Marker);
-      })
-    ];
+    const ordered = [];
+    for (const s of scripts) {
+      const t = s.textContent || "";
+      if (t.includes(ds7Marker)) ordered.unshift({ text: t, isDs7: true });
+      else if (t.includes("AF_initDataCallback")) ordered.push({ text: t, isDs7: false });
+    }
 
-    for (const script of orderedScripts) {
-      const text = script.textContent || "";
-      const isDs7 = text.includes(ds7Marker);
-      const startIdx = isDs7 ? text.indexOf(ds7Marker) : 0;
-      const pos = text.indexOf(`"${mediaId}"`, startIdx);
+    for (const { text, isDs7 } of ordered) {
+      const pos = text.indexOf(`"${mediaId}"`, isDs7 ? text.indexOf(ds7Marker) : 0);
       if (pos < 0) continue;
       const slice = text.slice(pos + mediaId.length + 2, pos + 2500);
-      const owned = evaluateSliceOwnership(slice, viewerActorId);
+      let owned = evaluateSliceOwnership(slice, viewerActorId);
+      if (owned === null && isDs7) owned = VIEWER_LIB_RE.test(slice);
       if (owned !== null) {
         rpcOwnershipCache.set(mediaId, owned);
         return owned;
-      }
-      if (isDs7) {
-        const fallback = /\["AF1Qip[A-Za-z0-9_\-]{20,}"\],\[\[1\],/.test(slice);
-        rpcOwnershipCache.set(mediaId, fallback);
-        return fallback;
-      }
-    }
-    return null;
-  }
-
-  function findRenderedTileByMediaId(mediaId) {
-    if (!mediaId || typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
-      return null;
-    }
-    for (const link of Array.from(document.querySelectorAll('a[href*="/photo/"]'))) {
-      if (parsePhotoIdFromPath(link.getAttribute?.("href") || "") === mediaId) {
-        return link;
       }
     }
     return null;
@@ -229,60 +189,35 @@
 
   function isUnownedSharedItem(mediaId, checkboxOrTile) {
     const scriptOwned = isOwnedByViewerInScripts(mediaId);
-    if (scriptOwned === false) return true;
-    if (scriptOwned === true) return false;
-    const targetEl = checkboxOrTile || findRenderedTileByMediaId(mediaId);
+    if (scriptOwned !== null) return !scriptOwned;
+    const targetEl =
+      checkboxOrTile || getPhotoLinks().find((l) => parsePhotoIdFromPath(l.getAttribute?.("href") || "") === mediaId);
     if (targetEl) {
       const tileOwner = resolveTileOwnerName(targetEl);
       const viewerName = resolveViewerAccountName();
-      if (tileOwner && viewerName && !isSameOwnerName(tileOwner, viewerName)) {
-        return true;
-      }
+      if (tileOwner && viewerName && !isSameOwnerName(tileOwner, viewerName)) return true;
     }
     return false;
   }
 
   function classifyAriaLabel(label, checkboxEl) {
-    if (checkboxEl && tileHasDurationBadge(checkboxEl)) {
-      return "skipped_video";
-    }
-    const linkLabel = checkboxEl ? findTileLink(checkboxEl)?.getAttribute?.("aria-label") || "" : "";
+    if (checkboxEl && tileHasDurationBadge(checkboxEl)) return "skipped_video";
+    const link = checkboxEl ? findTileLink(checkboxEl) : null;
+    const linkLabel = link?.getAttribute?.("aria-label") || "";
     const combinedLabel = [label || "", linkLabel].filter(Boolean).join(" - ");
+    const mediaId = link ? parsePhotoIdFromPath(link.getAttribute?.("href") || "") : null;
+
     if (!combinedLabel) {
-      if (checkboxEl && findTileLink(checkboxEl)) {
-        const mediaId = resolveMediaId(checkboxEl);
-        return isUnownedSharedItem(mediaId, checkboxEl) ? "skipped_unowned" : "eligible";
-      }
-      return "skipped_unsupported";
+      return link ? (isUnownedSharedItem(mediaId, checkboxEl) ? "skipped_unowned" : "eligible") : "skipped_unsupported";
     }
-    const hasPrefix = (prefix) =>
-      combinedLabel.startsWith(prefix) || combinedLabel.includes(` - ${prefix}`);
-    if (
-      hasPrefix("Video - ") ||
-      hasPrefix("Vidéo - ") ||
-      hasPrefix("Vídeo - ") ||
-      hasPrefix("Animation - ") ||
-      hasPrefix("Animación - ")
-    ) {
-      return "skipped_video";
-    }
-    if (/ - (Shared by|Partagé par|Compartido por) /i.test(combinedLabel)) {
+    if (VIDEO_LABEL_RE.test(combinedLabel)) return "skipped_video";
+    if (/ - (Shared by|Partagé par|Compartido por) /i.test(combinedLabel) || isUnownedSharedItem(mediaId, checkboxEl)) {
       return "skipped_unowned";
     }
-    const mediaId = checkboxEl ? resolveMediaId(checkboxEl) : null;
-    if (isUnownedSharedItem(mediaId, checkboxEl)) {
-      return "skipped_unowned";
-    }
-    if (
-      hasPrefix("Photo - ") ||
-      hasPrefix("Foto - ") ||
-      hasPrefix("Burst photo - ") ||
-      hasPrefix("Raw photo - ") ||
-      / - (Photo stack|Top shot|Pile de photos|Mejor toma)\b/i.test(combinedLabel)
-    ) {
+    if (PHOTO_LABEL_RE.test(combinedLabel) || / - (Photo stack|Top shot|Pile de photos|Mejor toma)\b/i.test(combinedLabel)) {
       return "eligible";
     }
-    return checkboxEl && findTileLink(checkboxEl) ? "eligible" : "skipped_unsupported";
+    return link ? "eligible" : "skipped_unsupported";
   }
 
   function syncCheckboxElement(checkboxEl) {
@@ -293,23 +228,18 @@
 
     if (isChecked) {
       if (!selectedRegistry.has(id)) {
-        const label =
-          checkboxEl.getAttribute("aria-label") ||
-          findTileLink(checkboxEl)?.getAttribute("aria-label") ||
-          "";
-        const classification = classifyAriaLabel(label, checkboxEl);
+        const label = checkboxEl.getAttribute("aria-label") || findTileLink(checkboxEl)?.getAttribute?.("aria-label") || "";
         selectedRegistry.set(id, {
           id,
           order: selectionOrderCounter++,
-          classification
+          classification: classifyAriaLabel(label, checkboxEl)
         });
         return true;
-      } else {
-        const existing = selectedRegistry.get(id);
-        if (existing && existing.classification === "eligible" && isUnownedSharedItem(id, checkboxEl)) {
-          existing.classification = "skipped_unowned";
-          return true;
-        }
+      }
+      const existing = selectedRegistry.get(id);
+      if (existing?.classification === "eligible" && isUnownedSharedItem(id, checkboxEl)) {
+        existing.classification = "skipped_unowned";
+        return true;
       }
     } else if (selectedRegistry.has(id)) {
       selectedRegistry.delete(id);
@@ -320,12 +250,11 @@
 
   function scanVisibleCheckboxes() {
     let changed = false;
-    if ( typeof document === "undefined" ) return false;
+    if (typeof document === "undefined") return false;
     const checkedNodes = document.querySelectorAll('[role="checkbox"][aria-checked="true"]');
     for (const node of checkedNodes) {
       if (syncCheckboxElement(node)) changed = true;
     }
-    // If no checkboxes are checked on screen and the "Clear selection" button is absent, clear stale registry
     if (checkedNodes.length === 0 && selectedRegistry.size > 0) {
       const clearBtn = document.querySelector(
         'button[aria-label="Clear selection"], button[aria-label="Annuler la sélection"], button[aria-label="Borrar selección"], button[jslog*="8886"]'
@@ -348,6 +277,9 @@
     if (lastPathKey && currentKey !== lastPathKey) {
       lastPathKey = currentKey;
       selectedRegistry.clear();
+      rpcOwnershipCache.clear();
+      cachedViewerGaiaId = null;
+      cachedViewerActorId = null;
       selectionOrderCounter = 0;
       return true;
     }
@@ -355,9 +287,7 @@
     return pathChanged;
   }
 
-  function sortedEntries() {
-    return Array.from(selectedRegistry.values()).sort((a, b) => a.order - b.order);
-  }
+  const sortedEntries = () => Array.from(selectedRegistry.values()).sort((a, b) => a.order - b.order);
 
   function getIdsByEligibility(wantEligible) {
     if (parsePhotoIdFromPath()) return [];
@@ -367,42 +297,24 @@
       .map((item) => item.id);
   }
 
-  function getEligibleIds() {
-    return getIdsByEligibility(true);
-  }
-
-  function getSkippedIds() {
-    return getIdsByEligibility(false);
-  }
+  const getEligibleIds = () => getIdsByEligibility(true);
+  const getSkippedIds = () => getIdsByEligibility(false);
 
   function getSummary() {
     const viewerId = parsePhotoIdFromPath();
     if (viewerId) {
-      return {
-        mode: "viewer",
-        eligible: 0,
-        videos: 0,
-        skipped: 0,
-        total: 0,
-        viewerPhotoId: viewerId,
-        inAlbum: false
-      };
+      return { mode: "viewer", eligible: 0, videos: 0, skipped: 0, total: 0, viewerPhotoId: viewerId, inAlbum: false };
     }
-
     scanVisibleCheckboxes();
     const entries = sortedEntries();
-    let eligible = 0;
-    let videos = 0;
-    let skipped = 0;
+    let eligible = 0, videos = 0, skipped = 0;
     for (const item of entries) {
-      if (item.classification === "eligible") {
-        eligible++;
-      } else {
+      if (item.classification === "eligible") eligible++;
+      else {
         skipped++;
         if (item.classification === "skipped_video") videos++;
       }
     }
-
     const inAlbum = isAlbumPage();
     return {
       mode: entries.length > 0 ? "selection" : inAlbum ? "album" : "none",
@@ -415,93 +327,106 @@
     };
   }
 
-  function extractPageToken(key) {
-    const regex = new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)"`);
-    for (const script of Array.from(document.querySelectorAll("script"))) {
+  function extractPageTokens(keys) {
+    const tokens = {};
+    let left = keys.length;
+    for (const script of getScripts()) {
       const text = script.textContent;
-      if (!text || !text.includes(`"${key}"`)) continue;
-      const m = regex.exec(text);
-      if (m) {
-        try {
-          return JSON.parse(`"${m[1]}"`);
-        } catch (e) {
-          return m[1];
+      if (!text) continue;
+      for (const key of keys) {
+        if (key in tokens || !text.includes(`"${key}"`)) continue;
+        const m = new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
+        if (m) {
+          try {
+            tokens[key] = JSON.parse(`"${m[1]}"`);
+          } catch (e) {
+            tokens[key] = m[1];
+          }
+          if (--left === 0) return tokens;
         }
       }
     }
-    return null;
+    return tokens;
   }
 
   async function enumerateAlbumViaRpc(albumKey) {
-    const at = extractPageToken("SNlM0e");
-    const sid = extractPageToken("FdrFJe");
-    const bl = extractPageToken("cfb2h");
-    const path = extractPageToken("eptZe");
-    if (!at || !sid || !bl || !path) {
-      throw new Error("missing_page_tokens");
+    const { SNlM0e: at, FdrFJe: sid, cfb2h: bl, eptZe: path } = extractPageTokens([
+      "SNlM0e", "FdrFJe", "cfb2h", "eptZe"
+    ]);
+    if (!at || !sid || !bl || !path) throw new Error("missing_page_tokens");
+
+    const renderedTiles = new Map();
+    for (const link of getPhotoLinks()) {
+      const id = parsePhotoIdFromPath(link.getAttribute?.("href") || "");
+      if (id && !renderedTiles.has(id)) renderedTiles.set(id, link);
     }
 
     const ids = [];
     const skippedIds = [];
+    const seen = new Set();
     let pageToken = null;
     let pages = 0;
 
     do {
       const payload = [[["snAcKc", JSON.stringify([albumKey, pageToken, null, null]), null, "generic"]]];
       const body = `f.req=${encodeURIComponent(JSON.stringify(payload))}&at=${encodeURIComponent(at)}&`;
-      const queryParams = {
+      const queryStr = Object.entries({
         rpcids: "snAcKc",
         "source-path": location.pathname,
         "f.sid": sid,
-        bl: bl,
+        bl,
         pageId: "none",
         rt: "c"
-      };
-      const queryStr = Object.entries(queryParams)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      })
+        .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
         .join("&");
-      const url = `https://photos.google.com${path}data/batchexecute?${queryStr}`;
-      const resp = await fetch(url, {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
-        body
-      });
-      if (!resp.ok) throw new Error(`http_${resp.status}`);
-      const text = await resp.text();
+
+      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+      const tStart = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const timer = ctrl
+        ? setTimeout(() => {
+            if ((typeof performance !== "undefined" ? performance.now() : Date.now()) - tStart >= RPC_TIMEOUT_MS * 0.5) {
+              ctrl.abort();
+            }
+          }, RPC_TIMEOUT_MS)
+        : null;
+      let text;
+      try {
+        const resp = await fetch(`https://photos.google.com${path}data/batchexecute?${queryStr}`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body,
+          ...(ctrl ? { signal: ctrl.signal } : {})
+        });
+        if (!resp.ok) throw new Error(`http_${resp.status}`);
+        text = await resp.text();
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
+
       const wrbLine = text.split("\n").find((line) => line.includes("wrb.fr"));
       if (!wrbLine) throw new Error("missing_wrb_envelope");
-      const outer = JSON.parse(wrbLine);
-      const entry = outer.find((row) => row?.[0] === "wrb.fr");
-      const rawInnerJson = entry?.[2] || "";
+      const rawInnerJson = JSON.parse(wrbLine).find((row) => row?.[0] === "wrb.fr")?.[2] || "";
       const parsed = JSON.parse(rawInnerJson);
       const rows = Array.isArray(parsed?.[1]) ? parsed[1] : [];
       const viewerActorId = resolveViewerActorId(rawInnerJson);
 
       for (const row of rows) {
         const mediaKey = row?.[0];
-        if (typeof mediaKey !== "string") continue;
+        if (typeof mediaKey !== "string" || seen.has(mediaKey)) continue;
+        seen.add(mediaKey);
         const meta = Array.isArray(row) ? row[row.length - 1] : null;
         const durationMs = meta?.[76647426]?.[0] ?? null;
         const rowOwned = isSnAcKcRowOwnedByViewer(row, viewerActorId);
-        if (rowOwned !== null) {
-          rpcOwnershipCache.set(mediaKey, rowOwned);
-        }
-        const scriptOwned = isOwnedByViewerInScripts(mediaKey);
-        const domTile = findRenderedTileByMediaId(mediaKey);
-        const domClassification = domTile
-          ? classifyAriaLabel(domTile.getAttribute?.("aria-label") || "", domTile)
-          : "eligible";
-        if (
-          durationMs !== null ||
-          rowOwned === false ||
-          scriptOwned === false ||
-          domClassification !== "eligible"
-        ) {
-          skippedIds.push(mediaKey);
-        } else {
-          ids.push(mediaKey);
-        }
+        if (rowOwned !== null) rpcOwnershipCache.set(mediaKey, rowOwned);
+        const scriptOwned = rowOwned === null ? isOwnedByViewerInScripts(mediaKey) : rowOwned;
+        const domTile = renderedTiles.get(mediaKey) || null;
+        const domCls = domTile ? classifyAriaLabel(domTile.getAttribute?.("aria-label") || "", domTile) : "eligible";
+        (durationMs !== null || rowOwned === false || scriptOwned === false || domCls !== "eligible"
+          ? skippedIds
+          : ids
+        ).push(mediaKey);
       }
       pageToken = parsed?.[2] ?? null;
       pages++;
@@ -516,28 +441,20 @@
     const seen = new Set();
 
     const collectVisible = () => {
-      const links = document.querySelectorAll('a[href*="/photo/"]');
-      for (const link of links) {
+      for (const link of getPhotoLinks()) {
         if (link.offsetParent === null) continue;
         const id = parsePhotoIdFromPath(link.getAttribute("href") || "");
         if (!id || seen.has(id)) continue;
         seen.add(id);
-        const label = link.getAttribute("aria-label") || "";
-        const cls = classifyAriaLabel(label, link);
-        if (cls === "eligible") {
-          ids.push(id);
-        } else {
-          skippedIds.push(id);
-        }
+        const cls = classifyAriaLabel(link.getAttribute("aria-label") || "", link);
+        (cls === "eligible" ? ids : skippedIds).push(id);
       }
     };
 
     collectVisible();
 
-    // Find scrollable container if album has more items
     let scrollEl = null;
-    const firstLink = document.querySelector('a[href*="/photo/"]');
-    let cur = firstLink?.parentElement;
+    let cur = document.querySelector('a[href*="/photo/"]')?.parentElement;
     while (cur && cur !== document.body) {
       const style = getComputedStyle(cur);
       if ((style.overflowY === "auto" || style.overflowY === "scroll") && cur.scrollHeight > cur.clientHeight + 20) {
@@ -558,21 +475,16 @@
       }
       scrollEl.scrollTop = initialTop;
     }
-
     return { ids, skippedIds };
   }
 
   async function enumerateCurrentAlbum() {
-    const match = location.pathname.match(/^(?:\/u\/\d+)?\/(?:album|share)\/([^/?#]+)/);
-    const albumKey = match ? match[1] : null;
-    if (!albumKey) {
-      return { ids: [], skippedIds: [], error: "not_in_album" };
-    }
+    const albumKey = location.pathname.match(/^(?:\/u\/\d+)?\/(?:album|share)\/([^/?#]+)/)?.[1] || null;
+    if (!albumKey) return { ids: [], skippedIds: [], error: "not_in_album" };
     try {
       const res = await enumerateAlbumViaRpc(albumKey);
       if (res.ids.length > 0 || res.skippedIds.length > 0) return res;
     } catch (e) {}
-
     return await enumerateAlbumViaDom();
   }
 
@@ -580,20 +492,29 @@
     selectedRegistry.clear();
     rpcOwnershipCache.clear();
     cachedViewerAccountName = null;
+    cachedViewerGaiaId = null;
+    cachedViewerActorId = null;
     selectionOrderCounter = 0;
     notifyListeners();
   }
 
   if (typeof MutationObserver !== "undefined" && typeof document !== "undefined" && document.documentElement) {
+    const OWN_IDS = new Set(["wphoto-menu-card", "wphoto-status-bar", "wphoto-trigger-btn"]);
+    const OWN_SEL = "#wphoto-menu-card, #wphoto-status-bar, #wphoto-trigger-btn";
     const observer = new MutationObserver((mutations) => {
       let changed = checkNavigationReset();
+      let needScan = false;
+      const onViewer = Boolean(parsePhotoIdFromPath());
       for (const m of mutations) {
+        if (m.target?.nodeType === 1 && m.target.closest?.(OWN_SEL)) continue;
         if (m.type === "attributes" && m.target) {
-          if (syncCheckboxElement(m.target)) changed = true;
+          if (!onViewer && syncCheckboxElement(m.target)) changed = true;
         } else if (m.type === "childList") {
-          if (scanVisibleCheckboxes()) changed = true;
+          const nodes = [...m.addedNodes, ...m.removedNodes];
+          if (nodes.length === 0 || !nodes.every((n) => OWN_IDS.has(n?.id))) needScan = true;
         }
       }
+      if (needScan && !onViewer && scanVisibleCheckboxes()) changed = true;
       if (changed) notifyListeners();
     });
 

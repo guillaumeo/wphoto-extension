@@ -51,18 +51,16 @@
   const SAVE_QUIESCENCE_MAX_WAIT_MS = 4000;
   const METADATA_BUDGET_MS = 2000;
   const METADATA_STABLE_MS = 200;
+  const PHOTO_NOT_FOUND_REGEX =
+    /\b(photo not found|can't find photo|cannot find photo|photo introuvable|impossible de trouver la photo|no se ha encontrado la foto|no se encontr[óo] la foto)\b/i;
+  const SHARED_BY_REGEX = /\b(Shared by|Partagé par|Compartido por)\b/i;
 
-  function isBatchAborted() {
-    return (
-      typeof window !== "undefined" &&
-      typeof window.__wphotoIsBatchAborted === "function" &&
-      window.__wphotoIsBatchAborted()
-    );
-  }
+  const isBatchAborted = () =>
+    typeof window !== "undefined" &&
+    typeof window.__wphotoIsBatchAborted === "function" &&
+    window.__wphotoIsBatchAborted();
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   async function waitFor(predicate, timeoutMs, pollMs = 80) {
     const start = performance.now();
@@ -84,10 +82,7 @@
       try {
         chrome.runtime.sendMessage(message, (response) => {
           if (chrome.runtime.lastError || !response) {
-            resolve({
-              ok: false,
-              error: chrome.runtime.lastError?.message || "no_response"
-            });
+            resolve({ ok: false, error: chrome.runtime.lastError?.message || "no_response" });
             return;
           }
           resolve(response);
@@ -104,9 +99,7 @@
       if (retryDelayMs > 0) await sleep(retryDelayMs);
       if (!isBatchAborted()) {
         const attach = await sendToBackground({ type: "BATCH_ATTACH", forPhotoStep: true });
-        if (attach.ok) {
-          res = await sendToBackground(message);
-        }
+        if (attach.ok) res = await sendToBackground(message);
       }
     }
     return res;
@@ -117,90 +110,65 @@
   function markPanelSeenOpen() {
     panelSeenOpenInMemory = true;
     try {
-      if (typeof sessionStorage !== "undefined") {
-        sessionStorage.setItem("__wphotoPanelOpen", "1");
-      }
+      if (typeof sessionStorage !== "undefined") sessionStorage.setItem("__wphotoPanelOpen", "1");
     } catch (e) {}
   }
 
   function wasPanelPreviouslyOpen() {
     if (panelSeenOpenInMemory) return true;
     try {
-      if (typeof sessionStorage !== "undefined") {
-        return sessionStorage.getItem("__wphotoPanelOpen") === "1";
-      }
-    } catch (e) {}
-    return false;
+      return typeof sessionStorage !== "undefined" && sessionStorage.getItem("__wphotoPanelOpen") === "1";
+    } catch (e) {
+      return false;
+    }
   }
 
   function isElementVisible(el) {
-    if (!el) return false;
-    if (el.offsetParent === null) return false;
-    if (typeof el.closest === "function") {
-      const hiddenAnc = el.closest('[aria-hidden="true"], [hidden], [inert]');
+    if (!el || el.offsetParent === null) return false;
+    const hiddenAnc = el.closest?.('[aria-hidden="true"], [hidden], [inert]');
+    if (
+      hiddenAnc &&
+      (hiddenAnc !== el ||
+        el.hidden === true ||
+        el.getAttribute?.("aria-hidden") === "true" ||
+        el.getAttribute?.("hidden") != null)
+    ) {
+      return false;
+    }
+    try {
+      const st = typeof window !== "undefined" ? window.getComputedStyle?.(el) : null;
       if (
-        hiddenAnc &&
-        (hiddenAnc !== el ||
-          el.hidden === true ||
-          (typeof el.getAttribute === "function" &&
-            (el.getAttribute("aria-hidden") === "true" || el.getAttribute("hidden") !== null)))
+        st &&
+        (st.display === "none" ||
+          st.visibility === "hidden" ||
+          st.visibility === "collapse" ||
+          parseFloat(st.opacity) === 0)
       ) {
         return false;
       }
-    }
-    if (typeof window !== "undefined" && typeof window.getComputedStyle === "function") {
-      try {
-        const st = window.getComputedStyle(el);
-        if (
-          st &&
-          (st.display === "none" ||
-            st.visibility === "hidden" ||
-            st.visibility === "collapse" ||
-            parseFloat(st.opacity) === 0)
-        ) {
-          return false;
-        }
-      } catch (e) {}
-    }
-    if (typeof el.checkVisibility === "function") {
-      try {
-        if (
-          !el.checkVisibility({
-            visibilityProperty: true,
-            opacityProperty: true,
-            contentVisibilityAuto: true
-          })
-        ) {
-          return false;
-        }
-      } catch (e) {}
-    }
-    if (typeof el.getBoundingClientRect === "function") {
-      const r = el.getBoundingClientRect();
-      if (r && (r.width === 0 || r.height === 0)) return false;
+    } catch (e) {}
+    try {
       if (
-        r &&
-        typeof r.left === "number" &&
-        typeof window !== "undefined" &&
-        typeof window.innerWidth === "number" &&
-        window.innerWidth > 0
+        el.checkVisibility &&
+        !el.checkVisibility({ visibilityProperty: true, opacityProperty: true, contentVisibilityAuto: true })
       ) {
+        return false;
+      }
+    } catch (e) {}
+    const r = el.getBoundingClientRect?.();
+    if (r) {
+      if (r.width === 0 || r.height === 0) return false;
+      const winW = typeof window !== "undefined" ? window.innerWidth : 0;
+      const winH = typeof window !== "undefined" ? window.innerHeight : 0;
+      if (winW > 0 && typeof r.left === "number") {
         const right = typeof r.right === "number" ? r.right : r.left + (r.width || 0);
-        const bottom = typeof r.bottom === "number" ? r.bottom : (r.top || 0) + (r.height || 0);
         const cx = r.left + (r.width || 0) / 2;
-        if (right <= 0 || r.left >= window.innerWidth || cx <= 0 || cx >= window.innerWidth) {
-          return false;
-        }
-        if (
-          typeof window.innerHeight === "number" &&
-          window.innerHeight > 0 &&
-          typeof r.top === "number"
-        ) {
-          const cy = r.top + (r.height || 0) / 2;
-          if (bottom <= 0 || r.top >= window.innerHeight || cy <= 0 || cy >= window.innerHeight) {
-            return false;
-          }
-        }
+        if (right <= 0 || r.left >= winW || cx <= 0 || cx >= winW) return false;
+      }
+      if (winH > 0 && typeof r.top === "number") {
+        const bottom = typeof r.bottom === "number" ? r.bottom : r.top + (r.height || 0);
+        const cy = r.top + (r.height || 0) / 2;
+        if (bottom <= 0 || r.top >= winH || cy <= 0 || cy >= winH) return false;
       }
     }
     return true;
@@ -226,41 +194,15 @@
     return visible.length > 0 ? visible[visible.length - 1] : null;
   }
 
-  const PHOTO_NOT_FOUND_REGEX =
-    /\b(photo not found|can't find photo|cannot find photo|photo introuvable|impossible de trouver la photo|no se ha encontrado la foto|no se encontr[óo] la foto)\b/i;
-  const SHARED_BY_REGEX = /\b(Shared by|Partagé par|Compartido por)\b/i;
-
   function isPhotoNotFoundPage() {
     if (typeof document === "undefined") return false;
-    const bodyText = document.body?.innerText || document.body?.textContent || "";
-    if (bodyText && PHOTO_NOT_FOUND_REGEX.test(bodyText)) return true;
+    const bodyText = (document.body?.innerText || document.body?.textContent || "").trim();
+    if (bodyText) return PHOTO_NOT_FOUND_REGEX.test(bodyText);
     if (typeof document.querySelectorAll === "function") {
       for (const el of Array.from(document.querySelectorAll("div, span, p, h1, h2"))) {
-        if (el.children && el.children.length > 0) continue;
+        if (el.children?.length > 0) continue;
         const txt = (el.textContent || "").trim();
-        if (txt && txt.length < 160 && PHOTO_NOT_FOUND_REGEX.test(txt)) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  async function isInfoPanelReadOnlyUnowned() {
-    if (typeof document === "undefined") return false;
-    if (findVisibleDescriptionTextarea()) return false;
-    if (typeof document.querySelectorAll === "function") {
-      for (const el of Array.from(document.querySelectorAll("dl, div, span"))) {
-        if (el.children && el.children.length > 0 && el.tagName !== "DL") continue;
-        const txt = (el.textContent || "").trim();
-        if (txt && txt.length < 200 && SHARED_BY_REGEX.test(txt)) {
-          return true;
-        }
-      }
-      const dls = queryVisibleElements("dl");
-      if (dls.length > 0 && isInfoPanelOpen()) {
-        const ta = await waitFor(findVisibleDescriptionTextarea, 600, 80);
-        if (!ta) return true;
+        if (txt && txt.length < 160 && PHOTO_NOT_FOUND_REGEX.test(txt)) return true;
       }
     }
     return false;
@@ -268,32 +210,16 @@
 
   function isInfoPanelOpen() {
     if (typeof document === "undefined") return false;
-    // 1. Visible Close Info button across any mounted slide
-    if (findFirstVisible(CLOSE_INFO_SELECTOR)) return true;
-    // 2. Visible Description textarea across any mounted slide
-    if (findFirstVisible(DIRECT_TEXTAREA_SELECTOR)) return true;
-    // 3. Info toggle button explicitly reporting expanded/pressed state
+    if (findFirstVisible(CLOSE_INFO_SELECTOR) || findFirstVisible(DIRECT_TEXTAREA_SELECTOR)) return true;
     for (const btn of queryVisibleElements(OPEN_INFO_SELECTOR)) {
-      if (
-        typeof btn.getAttribute === "function" &&
-        (btn.getAttribute("aria-expanded") === "true" || btn.getAttribute("aria-pressed") === "true")
-      ) {
+      if (btn.getAttribute?.("aria-expanded") === "true" || btn.getAttribute?.("aria-pressed") === "true") {
         return true;
       }
     }
-    // 4. Visible <dl> details list inside the right-hand info drawer
-    if (
-      typeof window !== "undefined" &&
-      typeof window.innerWidth === "number" &&
-      window.innerWidth > 0
-    ) {
+    if (typeof window !== "undefined" && typeof window.innerWidth === "number" && window.innerWidth > 0) {
       for (const dl of queryVisibleElements("dl")) {
-        if (typeof dl.getBoundingClientRect === "function") {
-          const r = dl.getBoundingClientRect();
-          if (r && r.width >= 120 && r.left >= window.innerWidth * 0.5) {
-            return true;
-          }
-        }
+        const r = dl.getBoundingClientRect?.();
+        if (r && r.width >= 120 && r.left >= window.innerWidth * 0.5) return true;
       }
     }
     return false;
@@ -301,74 +227,56 @@
 
   function findVisibleDescriptionTextarea(options = {}) {
     if (typeof document === "undefined") return null;
-    const excludeEl = options && options.excludeEl ? options.excludeEl : null;
-    const excludeEls = options && options.excludeEls ? options.excludeEls : null;
-    const strictExclude = Boolean(options && options.strictExclude);
+    const excludeEl = options?.excludeEl || null;
+    const excludeEls = options?.excludeEls || null;
+    const strictExclude = Boolean(options?.strictExclude);
 
-    const isExcluded = (ta) => {
-      if (!ta) return false;
-      if (excludeEl && ta === excludeEl) return true;
-      if (excludeEls) {
-        if (typeof excludeEls.has === "function" && excludeEls.has(ta)) return true;
-        if (Array.isArray(excludeEls) && excludeEls.includes(ta)) return true;
+    const isExcluded = (ta) =>
+      Boolean(
+        ta &&
+          ((excludeEl && ta === excludeEl) ||
+            (excludeEls && (excludeEls.has?.(ta) || (Array.isArray(excludeEls) && excludeEls.includes(ta)))))
+      );
+
+    const collectCandidates = () => {
+      const list = Array.from(document.querySelectorAll(DIRECT_TEXTAREA_SELECTOR)).filter(isElementVisible);
+      for (const ph of Array.from(document.querySelectorAll(PLACEHOLDER_SELECTOR))) {
+        if (ph.tagName === "TEXTAREA" && isElementVisible(ph) && !list.includes(ph)) list.push(ph);
       }
-      return false;
+      if ((excludeEl || excludeEls) && list.length > 0) {
+        const nonExcluded = list.filter((ta) => !isExcluded(ta));
+        if (nonExcluded.length > 0) return nonExcluded;
+        if (strictExclude) return [];
+      }
+      return list;
     };
 
-    const placeholders = Array.from(document.querySelectorAll(PLACEHOLDER_SELECTOR));
-    for (const ph of placeholders) {
-      if (ph.tagName !== "TEXTAREA" && isElementVisible(ph)) {
-        triggerDirectDomClick(ph);
+    let candidates = collectCandidates();
+    if (candidates.length === 0) {
+      let clickedPlaceholder = false;
+      for (const ph of Array.from(document.querySelectorAll(PLACEHOLDER_SELECTOR))) {
+        if (ph.tagName !== "TEXTAREA" && isElementVisible(ph)) {
+          triggerDirectDomClick(ph);
+          clickedPlaceholder = true;
+        }
       }
-    }
-
-    let candidates = Array.from(document.querySelectorAll(DIRECT_TEXTAREA_SELECTOR)).filter((ta) =>
-      isElementVisible(ta)
-    );
-    for (const ph of placeholders) {
-      if (ph.tagName === "TEXTAREA" && isElementVisible(ph) && !candidates.includes(ph)) {
-        candidates.push(ph);
-      }
-    }
-
-    if ((excludeEl || excludeEls) && candidates.length > 0) {
-      const nonExcluded = candidates.filter((ta) => !isExcluded(ta));
-      if (nonExcluded.length > 0) {
-        candidates = nonExcluded;
-      } else if (strictExclude) {
-        return null;
-      }
+      if (clickedPlaceholder) candidates = collectCandidates();
     }
 
     if (candidates.length === 0) return null;
     if (candidates.length === 1) return candidates[0];
-
-    if (
-      typeof document.activeElement === "object" &&
-      document.activeElement &&
-      candidates.includes(document.activeElement)
-    ) {
-      return document.activeElement;
-    }
+    if (document.activeElement && candidates.includes(document.activeElement)) return document.activeElement;
 
     if (typeof document.elementFromPoint === "function") {
       for (let i = candidates.length - 1; i >= 0; i--) {
         const ta = candidates[i];
-        if (typeof ta.getBoundingClientRect === "function") {
-          const r = ta.getBoundingClientRect();
-          if (r && r.width > 0 && r.height > 0) {
-            const hit = document.elementFromPoint(
-              Math.round(r.left + r.width / 2),
-              Math.round(r.top + r.height / 2)
-            );
-            if (hit && (hit === ta || (typeof ta.contains === "function" && ta.contains(hit)))) {
-              return ta;
-            }
-          }
+        const r = ta.getBoundingClientRect?.();
+        if (r && r.width > 0 && r.height > 0) {
+          const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+          if (hit && (hit === ta || ta.contains?.(hit))) return ta;
         }
       }
     }
-
     return candidates[candidates.length - 1];
   }
 
@@ -376,11 +284,8 @@
     if (typeof document === "undefined") return null;
     const byLabel = findFirstVisible(OPEN_INFO_SELECTOR);
     if (byLabel) return byLabel;
-
     if (typeof document.querySelectorAll === "function") {
-      for (const svgPath of Array.from(
-        document.querySelectorAll("button svg path, [role='button'] svg path")
-      )) {
+      for (const svgPath of Array.from(document.querySelectorAll("button svg path, [role='button'] svg path"))) {
         const d = svgPath.getAttribute("d") || "";
         if (d.includes("M11 7h2v2h-2zm0 4h2v6h-2z") || d.includes("M11,7h2v2h-2V7z")) {
           const btn = svgPath.closest('button, [role="button"]');
@@ -399,14 +304,15 @@
         (typeof Event !== "undefined" ? Event : null);
       if (EventCtor && typeof btn.dispatchEvent === "function") {
         for (const evtName of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
-          const evt = new EventCtor(evtName, {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            view: typeof window !== "undefined" ? window : undefined,
-            button: 0
-          });
-          btn.dispatchEvent(evt);
+          btn.dispatchEvent(
+            new EventCtor(evtName, {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              view: typeof window !== "undefined" ? window : undefined,
+              button: 0
+            })
+          );
         }
       }
     } catch (e) {}
@@ -423,22 +329,23 @@
     const t0 = performance.now();
     const logPanel = (msg) => {
       try {
-        if (typeof window !== "undefined" && typeof window.__batchAppendLog === "function") {
-          window.__batchAppendLog(
-            `[panel] +${Math.round(performance.now() - t0)}ms: ${msg} (state: open=${isInfoPanelOpen()})`
-          );
-        }
+        window.__batchAppendLog?.(
+          `[panel] +${Math.round(performance.now() - t0)}ms: ${msg} (state: open=${isInfoPanelOpen()})`
+        );
       } catch (e) {}
+    };
+    const confirmOpen = async (waitMs, settleMs = 200) => {
+      if (!(await waitFor(isInfoPanelOpen, waitMs, 60))) return false;
+      if (settleMs > 0) await sleep(settleMs);
+      if (!isInfoPanelOpen()) return false;
+      markPanelSeenOpen();
+      return true;
     };
 
     logPanel("ensureInfoPanelOpen started");
     if (isPhotoNotFoundPage()) {
       logPanel("ABORT: Photo not found page detected");
-      return {
-        ok: false,
-        error: "skipped_unowned",
-        detail: "photo not found (not in your library)"
-      };
+      return { ok: false, error: "skipped_unowned", detail: "photo not found (not in your library)" };
     }
     if (isInfoPanelOpen()) {
       if (!forceToggleIfNoTextarea || findVisibleDescriptionTextarea()) {
@@ -448,39 +355,28 @@
           logPanel("already open on start");
           return { ok: true };
         }
-        logPanel("panel was open on entry but closed within 150ms; re-opening");
+        logPanel("panel closed within 150ms; re-opening");
       } else {
-        logPanel("forceToggleIfNoTextarea: panel appears open but textarea missing; forcing re-open");
+        logPanel("forceToggleIfNoTextarea: textarea missing; forcing re-open");
       }
     } else if (!forceToggleIfNoTextarea && wasPanelPreviouslyOpen()) {
       logPanel("waiting up to 1200ms for remembered panel hydration");
-      const hydrated = await waitFor(isInfoPanelOpen, 1200, 80);
-      if (hydrated) {
-        await sleep(150);
-        if (isInfoPanelOpen()) {
-          markPanelSeenOpen();
-          logPanel("panel naturally hydrated without click");
-          return { ok: true };
-        }
+      if (await confirmOpen(1200, 150)) {
+        logPanel("panel naturally hydrated without click");
+        return { ok: true };
       }
     }
 
+    if (isBatchAborted()) return { ok: false, error: "batch_aborted", detail: "Batch cancelled" };
     let btn = findInfoButton();
     if (btn) {
       logPanel("attempting direct DOM event click on info button");
       triggerDirectDomClick(btn);
-      const opened = await waitFor(isInfoPanelOpen, 700, 60);
-      if (opened) {
+      if (await confirmOpen(700)) {
         logPanel("panel opened via direct click");
-        await sleep(200);
-        if (isInfoPanelOpen()) {
-          markPanelSeenOpen();
-          return { ok: true };
-        }
-        logPanel("WARNING: panel flapped/closed right after direct click! Re-triggering");
-      } else {
-        logPanel("panel not opened within 700ms of direct click");
+        return { ok: true };
       }
+      logPanel("direct click did not keep panel open");
     } else {
       logPanel("info button not found in DOM");
     }
@@ -489,52 +385,38 @@
       markPanelSeenOpen();
       return { ok: true };
     }
+    if (isBatchAborted()) return { ok: false, error: "batch_aborted", detail: "Batch cancelled" };
 
-    logPanel("attempting shortcut 'z' key dispatch");
-    await sendToBackground({
-      type: "BATCH_DISPATCH_KEY",
-      key: "z",
-      code: "KeyZ",
-      windowsVirtualKeyCode: 90
-    });
-    const zOpened = await waitFor(isInfoPanelOpen, 700, 60);
-    if (zOpened) {
-      logPanel("panel opened via 'z' key");
-      await sleep(200);
-      if (isInfoPanelOpen()) {
-        markPanelSeenOpen();
-        return { ok: true };
-      }
-      logPanel("WARNING: panel flapped/closed right after 'z' key! Continuing to CDP click");
-    } else {
-      logPanel("panel not opened within 700ms of 'z' key");
+    logPanel("attempting shortcut 'i' key dispatch");
+    await sendCdpWithReattach({ type: "BATCH_DISPATCH_KEY", key: "i", code: "KeyI", windowsVirtualKeyCode: 73 }, 0);
+    if (await confirmOpen(700)) {
+      logPanel("panel opened via 'i' key");
+      return { ok: true };
     }
 
     if (isInfoPanelOpen()) {
       markPanelSeenOpen();
       return { ok: true };
     }
+    if (isBatchAborted()) return { ok: false, error: "batch_aborted", detail: "Batch cancelled" };
 
-    if (!btn) btn = findInfoButton();
+    btn = findInfoButton() || btn;
     if (!btn) {
       logPanel("FAILED: info button missing from DOM completely");
       return { ok: false, error: "info_button_not_found", detail: "Open info button not found" };
     }
 
-    const rect = btn.getBoundingClientRect();
-    const cx = Math.round(rect.left + rect.width / 2);
-    const cy = Math.round(rect.top + rect.height / 2);
-    if (isBatchAborted()) {
-      return { ok: false, error: "batch_aborted", detail: "Batch cancelled" };
-    }
-    logPanel(`attempting CDP click at (${cx}, ${cy})`);
-    await sendCdpWithReattach({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy }, 0);
-
-    const cdpOpened = await waitFor(isInfoPanelOpen, 5000, 100);
-    if (cdpOpened) {
-      markPanelSeenOpen();
-      logPanel("panel opened via CDP click");
-      return { ok: true };
+    const rect = btn.getBoundingClientRect?.();
+    if (rect && rect.width > 0 && rect.height > 0) {
+      const cx = Math.round(rect.left + rect.width / 2);
+      const cy = Math.round(rect.top + rect.height / 2);
+      logPanel(`attempting CDP click at (${cx}, ${cy})`);
+      await sendCdpWithReattach({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy }, 0);
+      if (await waitFor(isInfoPanelOpen, 5000, 100)) {
+        markPanelSeenOpen();
+        logPanel("panel opened via CDP click");
+        return { ok: true };
+      }
     }
 
     logPanel("FAILED: panel did not open after all strategies");
@@ -553,25 +435,40 @@
     if (closeBtn && ta) {
       let cur = closeBtn.parentElement;
       while (cur && cur !== document.body) {
-        if (typeof cur.contains === "function" && cur.contains(ta)) return cur;
+        if (cur.contains?.(ta)) return cur;
         cur = cur.parentElement;
       }
     }
-    if (ta) {
-      return ta.closest?.('[role="region"]') || ta.parentElement?.parentElement || null;
+    return ta ? ta.closest?.('[role="region"]') || ta.parentElement?.parentElement || null : null;
+  }
+
+  async function isInfoPanelReadOnlyUnowned() {
+    if (typeof document === "undefined") return false;
+    if (findVisibleDescriptionTextarea()) return false;
+    const root = findInfoPanelRoot() || document;
+    const rootText = root !== document ? root.innerText || root.textContent || "" : "";
+    if ((!rootText || SHARED_BY_REGEX.test(rootText)) && typeof root.querySelectorAll === "function") {
+      for (const el of Array.from(root.querySelectorAll("dl, div, span"))) {
+        if (el.children?.length > 0 && el.tagName !== "DL") continue;
+        const txt = (el.textContent || "").trim();
+        if (txt && txt.length < 200 && SHARED_BY_REGEX.test(txt)) return true;
+      }
     }
-    return null;
+    if (queryVisibleElements("dl").length > 0 && isInfoPanelOpen()) {
+      const ta = await waitFor(findVisibleDescriptionTextarea, 600, 80);
+      if (!ta) return true;
+    }
+    return false;
   }
 
   function extractMetadataOnce() {
     const root = findInfoPanelRoot();
-    if (!root) {
-      return { people: [], untaggedCount: 0, location: null, year: null };
-    }
+    if (!root) return { people: [], untaggedCount: 0, location: null, year: null };
 
+    const anchors = Array.from(root.querySelectorAll("a"));
     const people = [];
     let untaggedCount = 0;
-    for (const aEl of Array.from(root.querySelectorAll("a"))) {
+    for (const aEl of anchors) {
       const href = aEl.getAttribute("href") ?? "";
       if (!/\/search\//.test(href) || !aEl.querySelector("img")) continue;
       const name = (aEl.textContent ?? "").trim();
@@ -583,35 +480,29 @@
     }
 
     let location = null;
-    const findMapAnchor = () => {
-      const direct = root.querySelector(
-        'a[href*="maps"], a[href*="google.com/maps"], a[href*="maps.google"], a[href*="goo.gl/maps"]'
-      );
-      if (direct) return direct;
-      for (const aEl of Array.from(root.querySelectorAll("a"))) {
-        const href = aEl.getAttribute("href") || "";
-        if (href.includes("maps") || href.includes("place")) return aEl;
-      }
+    let mapAnchor = root.querySelector(
+      'a[href*="maps"], a[href*="google.com/maps"], a[href*="maps.google"], a[href*="goo.gl/maps"]'
+    );
+    if (!mapAnchor) {
+      mapAnchor = anchors.find((a) => {
+        const h = a.getAttribute("href") || "";
+        return h.includes("maps") || h.includes("place");
+      });
+    }
+    if (!mapAnchor) {
       for (const svgPath of Array.from(root.querySelectorAll("svg path"))) {
         const d = svgPath.getAttribute("d") || "";
-        if (
-          d.startsWith("M12 2C8.13 2") ||
-          d.startsWith("M12 2c-3.87") ||
-          d.startsWith("M12 2C6.48 2")
-        ) {
-          const anc = svgPath.closest('a, button, [role="button"], div');
-          if (anc) return anc;
+        if (d.startsWith("M12 2C8.13 2") || d.startsWith("M12 2c-3.87") || d.startsWith("M12 2C6.48 2")) {
+          mapAnchor = svgPath.closest('a, button, [role="button"], div');
+          if (mapAnchor) break;
         }
       }
-      return null;
-    };
+    }
 
-    const mapAnchor = findMapAnchor();
     if (mapAnchor) {
       let cur = mapAnchor;
       for (let i = 0; i < 6 && cur && (cur = cur.parentElement); i++) {
-        const rawText = cur.innerText ?? cur.textContent ?? "";
-        const lines = rawText
+        const lines = (cur.innerText ?? cur.textContent ?? "")
           .split("\n")
           .map((l) => l.trim())
           .filter(
@@ -630,15 +521,13 @@
 
     const panelText = root.innerText ?? root.textContent ?? "";
     const yearMatch = panelText.match(/(?:^|\D)((?:19|20)\d{2})(?:\D|$)/);
-    const year = yearMatch ? yearMatch[1] : null;
-
-    return { people, untaggedCount, location, year };
+    return { people, untaggedCount, location, year: yearMatch ? yearMatch[1] : null };
   }
 
   async function extractMetadataWithStabilization() {
     const start = performance.now();
     let prev = extractMetadataOnce();
-    while (performance.now() - start < METADATA_BUDGET_MS) {
+    while (performance.now() - start < METADATA_BUDGET_MS && !isBatchAborted()) {
       await sleep(METADATA_STABLE_MS);
       const cur = extractMetadataOnce();
       if (cur.location === null && performance.now() - start < 1500) {
@@ -648,7 +537,8 @@
       if (
         cur.people.length === prev.people.length &&
         cur.untaggedCount === prev.untaggedCount &&
-        (cur.location !== null) === (prev.location !== null)
+        cur.location === prev.location &&
+        cur.year === prev.year
       ) {
         return cur;
       }
@@ -683,16 +573,12 @@
 
     const panelStart = performance.now();
     const openRes = await ensureInfoPanelOpen();
-    if (!openRes.ok) {
-      return finish(false, openRes.error, openRes.detail);
-    }
+    if (!openRes.ok) return finish(false, openRes.error, openRes.detail);
     timing.panelOpenMs = Math.round(performance.now() - panelStart);
 
     const hasExclusion = Boolean(
       excludeTextarea ||
-        (excludeTextareas &&
-          ((typeof excludeTextareas.size === "number" && excludeTextareas.size > 0) ||
-            (Array.isArray(excludeTextareas) && excludeTextareas.length > 0)))
+        (excludeTextareas && (excludeTextareas.size > 0 || (Array.isArray(excludeTextareas) && excludeTextareas.length > 0)))
     );
 
     const waitTaStart = performance.now();
@@ -708,9 +594,7 @@
         strictExclude: useStrict
       });
       if (ta) return { kind: "textarea", el: ta };
-      if (typeof document !== "undefined" && document.querySelector("video")) {
-        return { kind: "video" };
-      }
+      if (typeof document !== "undefined" && document.querySelector("video")) return { kind: "video" };
       if (!reopenedOnce && elapsed > 2500) {
         reopenedOnce = true;
         ensureInfoPanelOpen({ forceToggleIfNoTextarea: true }).catch(() => {});
@@ -718,14 +602,9 @@
       return null;
     }, PANEL_OPEN_TIMEOUT_MS);
 
-    if (!found) {
-      timing.textareaVisibleMs = Math.round(performance.now() - waitTaStart);
-      return finish(false, "textarea_not_visible");
-    }
-    if (found.kind === "video") {
-      timing.textareaVisibleMs = Math.round(performance.now() - waitTaStart);
-      return finish(false, "skipped_video", "video items are not supported");
-    }
+    timing.textareaVisibleMs = Math.round(performance.now() - waitTaStart);
+    if (!found) return finish(false, "textarea_not_visible");
+    if (found.kind === "video") return finish(false, "skipped_video", "video items are not supported");
 
     textarea = found.el;
     const settleStart = performance.now();
@@ -733,10 +612,7 @@
     const settleSleepMs = hasExclusion ? 150 : 250;
     for (let i = 0; i < maxSettleIters && performance.now() - settleStart <= 2000; i++) {
       await sleep(settleSleepMs);
-      const latest = findVisibleDescriptionTextarea({
-        excludeEl: excludeTextarea,
-        excludeEls: excludeTextareas
-      });
+      const latest = findVisibleDescriptionTextarea({ excludeEl: excludeTextarea, excludeEls: excludeTextareas });
       if (!latest || latest === textarea) break;
       textarea = latest;
     }
@@ -753,23 +629,26 @@
       timing.blurToSettleMs = 0;
       return finish(true);
     }
-
-    if (isBatchAborted()) {
-      return finish(false, "batch_aborted", "cancelled by user");
-    }
+    if (isBatchAborted()) return finish(false, "batch_aborted", "cancelled by user");
 
     const focusStart = performance.now();
-    const rect = textarea.getBoundingClientRect();
+    let rect = textarea.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      const refreshed = findVisibleDescriptionTextarea({ excludeEl: excludeTextarea, excludeEls: excludeTextareas });
+      if (refreshed) {
+        textarea = refreshed;
+        rect = textarea.getBoundingClientRect?.();
+      }
+    }
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return finish(false, "textarea_not_visible");
+    }
+
     let cx = Math.round(rect.left + rect.width / 2);
     let cy = Math.round(rect.top + rect.height / 2);
-
     const clickRes = await sendCdpWithReattach({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
-    if (isBatchAborted()) {
-      return finish(false, "batch_aborted", "cancelled by user");
-    }
-    if (!clickRes.ok) {
-      return finish(false, "click_dispatch_failed", clickRes.error);
-    }
+    if (isBatchAborted()) return finish(false, "batch_aborted", "cancelled by user");
+    if (!clickRes.ok) return finish(false, "click_dispatch_failed", clickRes.error);
 
     try {
       textarea.focus?.();
@@ -790,14 +669,10 @@
     let focused = !!(await waitFor(checkTextareaFocused, FOCUS_LAND_TIMEOUT_MS));
     for (let attempt = 0; !focused && attempt < FOCUS_RECLICK_ATTEMPTS && !isBatchAborted(); attempt++) {
       const latestTa =
-        findVisibleDescriptionTextarea({
-          excludeEl: excludeTextarea,
-          excludeEls: excludeTextareas
-        }) || textarea;
-      if (latestTa && latestTa !== textarea) {
-        textarea = latestTa;
-      }
-      const rRetry = textarea.getBoundingClientRect();
+        findVisibleDescriptionTextarea({ excludeEl: excludeTextarea, excludeEls: excludeTextareas }) || textarea;
+      if (latestTa && latestTa !== textarea) textarea = latestTa;
+      const rRetry = textarea.getBoundingClientRect?.();
+      if (!rRetry || rRetry.width <= 0 || rRetry.height <= 0) break;
       cx = Math.round(rRetry.left + rRetry.width / 2);
       cy = Math.round(rRetry.top + rRetry.height / 2);
       await sendCdpWithReattach({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy }, 0);
@@ -806,14 +681,9 @@
       } catch (e) {}
       focused = !!(await waitFor(checkTextareaFocused, FOCUS_LAND_TIMEOUT_MS));
     }
-    if (isBatchAborted()) {
-      return finish(false, "batch_aborted", "cancelled by user");
-    }
-    if (!focused) {
-      return finish(false, "caption_focus_failed");
-    }
+    if (isBatchAborted()) return finish(false, "batch_aborted", "cancelled by user");
+    if (!focused) return finish(false, "caption_focus_failed");
 
-    // Re-read value from the actually focused textarea (in case checkTextareaFocused adopted a newly mounted slide textarea)
     currentVal = textarea.value || "";
     if (!overwrite && currentVal.trim().length > 0) {
       return finish(false, "skipped_existing_description", "existing description preserved");
@@ -832,12 +702,8 @@
         windowsVirtualKeyCode: 65,
         commands: ["SelectAll"]
       });
-      if (isBatchAborted()) {
-        return finish(false, "batch_aborted", "cancelled by user");
-      }
-      if (!selAll.ok) {
-        return finish(false, "key_dispatch_failed", selAll.error || "select_all_failed");
-      }
+      if (isBatchAborted()) return finish(false, "batch_aborted", "cancelled by user");
+      if (!selAll.ok) return finish(false, "key_dispatch_failed", selAll.error || "select_all_failed");
       await sleep(30);
     }
 
@@ -846,18 +712,19 @@
         textarea.focus?.();
       } catch (e) {}
       if (document.activeElement !== textarea) {
-        await sendToBackground({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy });
-        await sleep(40);
+        const rCur = textarea.getBoundingClientRect?.();
+        if (rCur && rCur.width > 0 && rCur.height > 0) {
+          cx = Math.round(rCur.left + rCur.width / 2);
+          cy = Math.round(rCur.top + rCur.height / 2);
+          await sendCdpWithReattach({ type: "BATCH_DISPATCH_CLICK_AT", x: cx, y: cy }, 0);
+          await sleep(40);
+        }
       }
     }
 
     const insertRes = await sendCdpWithReattach({ type: "BATCH_INSERT_TEXT", text: targetText });
-    if (isBatchAborted()) {
-      return finish(false, "batch_aborted", "cancelled by user");
-    }
-    if (!insertRes.ok) {
-      return finish(false, "insert_text_failed", insertRes.error);
-    }
+    if (isBatchAborted()) return finish(false, "batch_aborted", "cancelled by user");
+    if (!insertRes.ok) return finish(false, "insert_text_failed", insertRes.error);
     timing.focusToInsertMs = Math.round(performance.now() - focusStart);
 
     const blurStart = performance.now();
@@ -867,12 +734,8 @@
       code: "Escape",
       windowsVirtualKeyCode: 27
     });
-    if (isBatchAborted()) {
-      return finish(false, "batch_aborted", "cancelled by user");
-    }
-    if (!escRes.ok) {
-      return finish(false, "key_dispatch_failed", escRes.error || "escape_failed");
-    }
+    if (isBatchAborted()) return finish(false, "batch_aborted", "cancelled by user");
+    if (!escRes.ok) return finish(false, "key_dispatch_failed", escRes.error || "escape_failed");
 
     const seedMs = Math.min(Math.round(performance.now() - blurStart) + 250, 3000);
     const qRes = await sendToBackground({
@@ -882,7 +745,12 @@
       seedRecentMs: seedMs
     });
     let saveXhrs = qRes.ok && typeof qRes.saveXhrsObserved === "number" ? qRes.saveXhrsObserved : -1;
-    if (saveXhrs === 0) {
+    if (saveXhrs === 0 && !isBatchAborted()) {
+      if (document.activeElement === textarea) {
+        try {
+          textarea.blur?.();
+        } catch (e) {}
+      }
       const qRes2 = await sendToBackground({
         type: "BATCH_AWAIT_SAVE_QUIESCENCE",
         idleMs: SAVE_QUIESCENCE_IDLE_MS,

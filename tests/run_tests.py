@@ -455,6 +455,143 @@ def main():
         sel_01,
     )
 
+    def sel_02():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.setTimeout = (fn) => {{ Promise.resolve().then(fn); return 1; }};
+        globalThis.clearTimeout = () => {{}};
+
+        let observerCb = null;
+        let checkboxQueryCount = 0;
+        let mockScripts = [];
+        let mockAlbumLinks = [];
+        let mockAccountBtns = [];
+        let mockChecked = [];
+        globalThis.location = {{ pathname: "/album/ALB_2", href: "https://photos.google.com/album/ALB_2" }};
+        globalThis.getComputedStyle = () => ({{ overflowY: "visible" }});
+        globalThis.MutationObserver = class {{
+          constructor(cb) {{ observerCb = cb; }}
+          observe() {{}}
+        }};
+        globalThis.document = {{
+          documentElement: {{}},
+          body: {{}},
+          querySelectorAll(sel) {{
+            if (sel.includes('[role="checkbox"][aria-checked="true"]')) {{ checkboxQueryCount++; return mockChecked; }}
+            if (sel === 'a[href*="/photo/"]') return mockAlbumLinks;
+            if (sel === "script") return mockScripts;
+            if (sel.includes('a[role="button"][aria-label]')) return mockAccountBtns;
+            return [];
+          }},
+          querySelector(sel) {{
+            if (sel === 'a[href*="/photo/"]') return mockAlbumLinks[0] || null;
+            if (sel.includes("Clear selection")) return mockChecked.length > 0 ? {{ offsetParent: {{}} }} : null;
+            return null;
+          }}
+        }};
+
+        load({sel_file});
+        const sel = window.WPhotoSelection;
+
+        (async () => {{
+          // 1. RPC HTTP 500 and AbortError both fall back cleanly to DOM enumeration
+          mockScripts = [{{ textContent: '"SNlM0e":"AT","FdrFJe":"SID","cfb2h":"BL","eptZe":"/_/"' }}];
+          mockAlbumLinks = [
+            {{ offsetParent: {{}}, getAttribute: (k) => (k === "href" ? "/photo/DOM_P1" : "Photo - Jan 1"), querySelector: () => null, parentElement: {{ querySelectorAll: () => [] }} }},
+            {{ offsetParent: {{}}, getAttribute: (k) => (k === "href" ? "/photo/DOM_V1" : "Video - Jan 2"), querySelector: () => null, parentElement: {{ querySelectorAll: () => [] }} }}
+          ];
+          globalThis.fetch = async () => ({{ ok: false, status: 500 }});
+          const fallback500 = await sel.enumerateCurrentAlbum();
+          if (JSON.stringify(fallback500.ids) !== JSON.stringify(["DOM_P1"]) || JSON.stringify(fallback500.skippedIds) !== JSON.stringify(["DOM_V1"])) {{
+            throw new Error("Expected HTTP 500 RPC to fall back to DOM: " + JSON.stringify(fallback500));
+          }}
+          globalThis.fetch = async () => {{ const e = new Error("aborted"); e.name = "AbortError"; throw e; }};
+          const fallbackAbort = await sel.enumerateCurrentAlbum();
+          if (JSON.stringify(fallbackAbort.ids) !== JSON.stringify(["DOM_P1"])) {{
+            throw new Error("Expected AbortError RPC to fall back to DOM: " + JSON.stringify(fallbackAbort));
+          }}
+
+          // 2. Multi-page snAcKc RPC deduplicates overlapping mediaKey
+          mockAlbumLinks = [];
+          let page = 0;
+          globalThis.fetch = async () => {{
+            page++;
+            const inner = JSON.stringify([
+              null,
+              [["P_DUP", ["https://lh3.googleusercontent.com/1", 100, 100], 1, "d", 0, {{}}], ["P_P" + page, ["https://lh3.googleusercontent.com/2", 100, 100], 1, "d", 0, {{}}]],
+              page === 1 ? "PAGE2" : null
+            ]);
+            return {{ ok: true, status: 200, text: async () => ")]}}'\\n" + JSON.stringify([["wrb.fr", "snAcKc", inner]]) }};
+          }};
+          const multiRes = await sel.enumerateCurrentAlbum();
+          if (JSON.stringify(multiRes.ids) !== JSON.stringify(["P_DUP", "P_P1", "P_P2"])) {{
+            throw new Error("Expected multi-page RPC dedupe, got: " + JSON.stringify(multiRes));
+          }}
+
+          // 3. ds:7 script ownership classification
+          sel.clearAll();
+          mockScripts = [{{
+            textContent: "AF_initDataCallback({{key: 'ds:7', data: [\\"DS7_OWNED\\",1,[\\"AF1QipViewerActor0000000001\\"],[[1],\\"lib\\"],\\"DS7_UNOWNED\\",1,[\\"AF1QipOtherActor00000000002\\"],null]}});"
+          }}];
+          const makeBareTile = (id, ownerTxt) => {{
+            const link = {{
+              getAttribute: (k) => (k === "href" ? "/photo/" + id : null),
+              contains: () => false,
+              parentElement: {{
+                querySelectorAll: () => (ownerTxt ? [{{ children: [], textContent: ownerTxt }}] : [])
+              }}
+            }};
+            return {{
+              getAttribute: () => null,
+              querySelector: (s) => (s === 'a[href*="/photo/"]' ? link : null)
+            }};
+          }};
+          if (sel.classifyAriaLabel("", makeBareTile("DS7_OWNED")) !== "eligible" || sel.classifyAriaLabel("", makeBareTile("DS7_UNOWNED")) !== "skipped_unowned") {{
+            throw new Error("ds:7 ownership classification mismatch");
+          }}
+
+          // 4. Account-name fallback ownership
+          sel.clearAll();
+          mockScripts = [];
+          mockAccountBtns = [{{ getAttribute: () => "Google Account: Alice Smith (alice@example.com)" }}];
+          if (sel.classifyAriaLabel("", makeBareTile("ACC_BOB", "Bob Jones")) !== "skipped_unowned") {{
+            throw new Error("Expected Bob Jones tile to be skipped_unowned for Alice Smith");
+          }}
+          if (sel.classifyAriaLabel("", makeBareTile("ACC_ALICE", "Alice")) !== "eligible") {{
+            throw new Error("Expected Alice tile to be eligible for Alice Smith");
+          }}
+
+          // 5. MutationObserver ignores own UI mutations, batches childList scans, and resets on album change
+          const makeCb = (id) => {{
+            const link = {{ getAttribute: (k) => (k === "href" ? "/photo/" + id : k === "aria-label" ? "Photo - Oct 1" : null), parentElement: {{ querySelectorAll: () => [] }} }};
+            return {{ getAttribute: (k) => (k === "role" ? "checkbox" : k === "aria-checked" ? "true" : null), querySelector: () => link }};
+          }};
+          mockChecked = [makeCb("M1")];
+          sel.getEligibleIds();
+          checkboxQueryCount = 0;
+          observerCb([{{ type: "childList", target: {{ nodeType: 1, closest: (s) => (s.includes("wphoto-menu-card") ? {{}} : null) }}, addedNodes: [{{}}], removedNodes: [] }}]);
+          if (checkboxQueryCount !== 0) throw new Error("Own-UI mutation triggered checkbox scan");
+          observerCb([
+            {{ type: "childList", target: {{ nodeType: 1, closest: () => null }}, addedNodes: [{{}}], removedNodes: [] }},
+            {{ type: "childList", target: {{ nodeType: 1, closest: () => null }}, addedNodes: [{{}}], removedNodes: [] }}
+          ]);
+          if (checkboxQueryCount !== 1) throw new Error("Expected batched childList mutations to scan once, got " + checkboxQueryCount);
+          mockChecked = [];
+          globalThis.location.pathname = "/album/OTHER_ALBUM";
+          observerCb([]);
+          if (sel.getEligibleIds().length !== 0) throw new Error("Expected album navigation to clear selection registry");
+
+          print("SEL_02_OK");
+        }})();
+        """
+        assert "SEL_02_OK" in run_jsc(js)
+
+    runner.run_test(
+        "SEL-02",
+        "RPC timeout/HTTP fallback, multi-page dedupe, ds:7 & account ownership, and MutationObserver batching",
+        sel_02,
+    )
+
     # -------------------------------------------------------------------------
     # Suite 4: Info Panel Anti-Flap, Metadata & Caption Persistence
     # -------------------------------------------------------------------------
@@ -785,6 +922,327 @@ def main():
         "DOM-03",
         "Hidden Close-info rejection, remembered-panel hydration grace wait, and forced toggle when textarea missing",
         dom_03,
+    )
+
+    def dom_04():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.PointerEvent = class {{ constructor(t) {{ this.type = t; }} }};
+
+        let fakeClock = 0;
+        let timerSeq = 0;
+        const activeTimers = new Set();
+        globalThis.performance = {{ now: () => fakeClock }};
+        globalThis.setTimeout = (fn, ms) => {{
+          const id = ++timerSeq;
+          activeTimers.add(id);
+          Promise.resolve().then(() => {{
+            if (!activeTimers.has(id)) return;
+            activeTimers.delete(id);
+            fakeClock += (ms || 50);
+            fn();
+          }});
+          return id;
+        }};
+        globalThis.clearTimeout = (id) => {{ activeTimers.delete(id); }};
+
+        let panelOpen = false;
+        let flapOnSettle = false;
+        let openCheckCount = 0;
+        let infoBtnPresent = true;
+        let openViaKey = false;
+        let openViaCdp = false;
+        let sentMsgs = [];
+        let svgBtn = {{ offsetParent: {{}}, getAttribute: () => null, getBoundingClientRect: () => ({{ left: 10, top: 10, width: 20, height: 20 }}) }};
+        let svgPaths = [];
+
+        const infoBtn = {{
+          offsetParent: {{}},
+          dispatchEvent: () => {{}},
+          click: () => {{
+            if (flapOnSettle) {{
+              panelOpen = true;
+              openCheckCount = 0;
+            }}
+          }},
+          getBoundingClientRect: () => ({{ left: 10, top: 10, width: 20, height: 20 }})
+        }};
+
+        globalThis.chrome = {{
+          runtime: {{
+            lastError: null,
+            sendMessage(msg, cb) {{
+              sentMsgs.push(msg);
+              if (msg.type === "BATCH_DISPATCH_KEY" && msg.key === "i" && openViaKey) panelOpen = true;
+              if (msg.type === "BATCH_DISPATCH_CLICK_AT" && openViaCdp) panelOpen = true;
+              cb({{ ok: true }});
+            }}
+          }}
+        }};
+
+        globalThis.document = {{
+          activeElement: null,
+          querySelector(sel) {{
+            if (sel.includes("Close info")) {{
+              if (flapOnSettle && panelOpen && ++openCheckCount >= 2) {{
+                panelOpen = false;
+                flapOnSettle = false;
+              }}
+              return panelOpen ? {{ offsetParent: {{}}, getBoundingClientRect: () => ({{ width: 24, height: 24 }}) }} : null;
+            }}
+            if (sel.includes("Open info")) return infoBtnPresent ? infoBtn : null;
+            return null;
+          }},
+          querySelectorAll(sel) {{
+            if (sel.includes("svg path")) return svgPaths;
+            return [];
+          }}
+        }};
+
+        load({dom_file});
+        const dom = window.WPhotoDomCaption;
+
+        (async () => {{
+          // 1. Flap after direct click recovers via 'i' shortcut (KeyI / 73)
+          flapOnSettle = true;
+          openViaKey = true;
+          const r1 = await dom.ensureInfoPanelOpen();
+          const keyMsg = sentMsgs.find((m) => m.type === "BATCH_DISPATCH_KEY");
+          if (!r1.ok || !keyMsg || keyMsg.key !== "i" || keyMsg.code !== "KeyI" || keyMsg.windowsVirtualKeyCode !== 73) {{
+            throw new Error("Expected flap to recover via 'i' KeyI/73 shortcut: " + JSON.stringify({{ r1, sentMsgs }}));
+          }}
+
+          // 2. Direct click & 'i' fail -> CDP click fallback opens panel
+          panelOpen = false;
+          openViaKey = false;
+          openViaCdp = true;
+          sentMsgs = [];
+          const r2 = await dom.ensureInfoPanelOpen();
+          const cdpMsg = sentMsgs.find((m) => m.type === "BATCH_DISPATCH_CLICK_AT");
+          if (!r2.ok || !cdpMsg || cdpMsg.x !== 20 || cdpMsg.y !== 20) {{
+            throw new Error("Expected CDP click fallback at (20,20) to open panel: " + JSON.stringify({{ r2, sentMsgs }}));
+          }}
+
+          // 3. SVG path fallback in findInfoButton()
+          infoBtnPresent = false;
+          svgPaths = [{{ getAttribute: (k) => (k === "d" ? "M11 7h2v2h-2zm0 4h2v6h-2z" : ""), closest: () => svgBtn }}];
+          if (dom.findInfoButton() !== svgBtn) {{
+            throw new Error("Expected findInfoButton() SVG fallback to locate svgBtn");
+          }}
+
+          // 4. All strategies fail (5000ms CDP timeout) -> info_panel_did_not_open
+          svgPaths = [];
+          infoBtnPresent = true;
+          panelOpen = false;
+          openViaCdp = false;
+          const r4 = await dom.ensureInfoPanelOpen();
+          if (r4.ok || r4.error !== "info_panel_did_not_open") {{
+            throw new Error("Expected info_panel_did_not_open timeout error: " + JSON.stringify(r4));
+          }}
+
+          // 5. Missing info button + failed 'i' -> info_button_not_found
+          infoBtnPresent = false;
+          panelOpen = false;
+          const r5 = await dom.ensureInfoPanelOpen();
+          if (r5.ok || r5.error !== "info_button_not_found") {{
+            throw new Error("Expected info_button_not_found error: " + JSON.stringify(r5));
+          }}
+
+          // 6. Batch abort short-circuits ensureInfoPanelOpen without dispatching clicks/keys
+          sentMsgs = [];
+          globalThis.__wphotoIsBatchAborted = () => true;
+          const r6 = await dom.ensureInfoPanelOpen();
+          if (r6.ok || r6.error !== "batch_aborted" || sentMsgs.length !== 0) {{
+            throw new Error("Expected batch_aborted with zero dispatches: " + JSON.stringify({{ r6, sentMsgs }}));
+          }}
+
+          print("DOM_04_OK");
+        }})();
+        """
+        assert "DOM_04_OK" in run_jsc(js)
+
+    def dom_05():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.PointerEvent = class {{ constructor(t) {{ this.type = t; }} }};
+
+        let fakeClock = 0;
+        let timerSeq = 0;
+        const activeTimers = new Set();
+        globalThis.performance = {{ now: () => fakeClock }};
+        globalThis.setTimeout = (fn, ms) => {{
+          const id = ++timerSeq;
+          activeTimers.add(id);
+          Promise.resolve().then(() => {{
+            if (!activeTimers.has(id)) return;
+            activeTimers.delete(id);
+            fakeClock += (ms || 50);
+            fn();
+          }});
+          return id;
+        }};
+        globalThis.clearTimeout = (id) => {{ activeTimers.delete(id); }};
+
+        let panelOpen = true;
+        let videoPresent = false;
+        let textareas = [];
+        let dls = [];
+        let focusOnClickNum = 999;
+        let clickCount = 0;
+        let failFirstInsertNotAttached = false;
+        let quiesceReturnZeroOnce = false;
+        let quiesceCalls = 0;
+        let blurred = false;
+        let sentMsgs = [];
+        let locationReadyAt = 999999;
+
+        globalThis.chrome = {{
+          runtime: {{
+            lastError: null,
+            sendMessage(msg, cb) {{
+              sentMsgs.push(msg);
+              if (msg.type === "BATCH_DISPATCH_CLICK_AT") {{
+                clickCount++;
+                if (clickCount >= focusOnClickNum) globalThis.document.activeElement = textareas[0] || null;
+              }} else if (msg.type === "BATCH_INSERT_TEXT") {{
+                if (failFirstInsertNotAttached) {{
+                  failFirstInsertNotAttached = false;
+                  return cb({{ ok: false, error: "not_attached" }});
+                }}
+                if (textareas[0]) textareas[0].value = msg.text;
+              }} else if (msg.type === "BATCH_AWAIT_SAVE_QUIESCENCE") {{
+                quiesceCalls++;
+                if (quiesceReturnZeroOnce) {{
+                  quiesceReturnZeroOnce = false;
+                  return cb({{ ok: true, saveXhrsObserved: 0, waitMs: 50 }});
+                }}
+                return cb({{ ok: true, saveXhrsObserved: 1, waitMs: 50 }});
+              }}
+              cb({{ ok: true }});
+            }}
+          }}
+        }};
+
+        globalThis.document = {{
+          activeElement: null,
+          querySelector(sel) {{
+            if (sel === "video") return videoPresent ? {{}} : null;
+            if (sel.includes("Close info")) return panelOpen ? {{ offsetParent: {{}}, getBoundingClientRect: () => ({{ width: 24, height: 24 }}) }} : null;
+            return null;
+          }},
+          querySelectorAll(sel) {{
+            if (sel.startsWith("textarea[")) return textareas;
+            if (sel === "dl") return dls;
+            return [];
+          }}
+        }};
+
+        load({dom_file});
+        const dom = window.WPhotoDomCaption;
+
+        (async () => {{
+          // 1. Textarea mount timeout (10s) -> textarea_not_visible
+          const r1 = await dom.runCaption({{ text: "Test" }});
+          if (r1.success || r1.error !== "textarea_not_visible") {{
+            throw new Error("Expected textarea_not_visible timeout, got: " + JSON.stringify(r1));
+          }}
+
+          // 2. Video element present -> skipped_video
+          videoPresent = true;
+          const r2 = await dom.runCaption({{ text: "Test" }});
+          if (r2.success || r2.error !== "skipped_video") {{
+            throw new Error("Expected skipped_video, got: " + JSON.stringify(r2));
+          }}
+          videoPresent = false;
+
+          // 3. Zero-rect collapse before initial click -> textarea_not_visible with ZERO clicks
+          let rectReads = 0;
+          sentMsgs = [];
+          textareas = [{{
+            tagName: "TEXTAREA",
+            value: "",
+            getBoundingClientRect: () => (++rectReads <= 2 ? {{ left: 50, top: 50, width: 100, height: 30 }} : {{ left: 0, top: 0, width: 0, height: 0 }})
+          }}];
+          const r3 = await dom.runCaption({{ text: "Test" }});
+          if (r3.success || r3.error !== "textarea_not_visible" || sentMsgs.some((m) => m.type === "BATCH_DISPATCH_CLICK_AT")) {{
+            throw new Error("Zero-rect textarea should abort before clicking: " + JSON.stringify({{ r3, sentMsgs }}));
+          }}
+
+          // 4. Focus retry exhaustion -> caption_focus_failed; recovery on 2nd click -> success
+          textareas = [{{
+            tagName: "TEXTAREA",
+            value: "",
+            getBoundingClientRect: () => ({{ left: 50, top: 50, width: 100, height: 30 }}),
+            blur: () => {{ blurred = true; globalThis.document.activeElement = null; }}
+          }}];
+          clickCount = 0;
+          focusOnClickNum = 999;
+          const r4Fail = await dom.runCaption({{ text: "Test" }});
+          if (r4Fail.success || r4Fail.error !== "caption_focus_failed" || clickCount < 3) {{
+            throw new Error("Expected caption_focus_failed after retries: " + JSON.stringify({{ r4Fail, clickCount }}));
+          }}
+
+          // 5. Recovery on 2nd click + CDP not_attached auto-reattach + quiescence=0 blur + 2nd quiescence
+          clickCount = 0;
+          focusOnClickNum = 2;
+          failFirstInsertNotAttached = true;
+          quiesceReturnZeroOnce = true;
+          quiesceCalls = 0;
+          blurred = false;
+          sentMsgs = [];
+          const r5 = await dom.runCaption({{ text: "Saved after reattach" }});
+          if (!r5.success || textareas[0].value !== "Saved after reattach" || !blurred || quiesceCalls !== 2 || !sentMsgs.some((m) => m.type === "BATCH_ATTACH" && m.forPhotoStep)) {{
+            throw new Error("Expected focus recovery + reattach + blur retry: " + JSON.stringify({{ r5, blurred, quiesceCalls, val: textareas[0].value }}));
+          }}
+
+          // 6. isInfoPanelReadOnlyUnowned: false with textarea, true on Shared by / missing textarea timeout
+          if ((await dom.isInfoPanelReadOnlyUnowned()) !== false) throw new Error("Expected read-only false when textarea visible");
+          textareas = [];
+          const roPanel = {{
+            offsetParent: {{}},
+            innerText: "Shared by Alice",
+            closest: () => roPanel,
+            querySelectorAll: (s) => (s === "dl, div, span" ? [{{ children: [], tagName: "DIV", textContent: "Shared by Alice" }}] : []),
+            querySelector: () => null
+          }};
+          dls = [roPanel];
+          if ((await dom.isInfoPanelReadOnlyUnowned()) !== true) throw new Error("Expected read-only true on Shared by panel");
+          roPanel.innerText = "Details";
+          roPanel.querySelectorAll = () => [];
+          if ((await dom.isInfoPanelReadOnlyUnowned()) !== true) throw new Error("Expected read-only true when dl open and textarea absent");
+
+          // 7. extractMetadataWithStabilization: waits for late location, and exits fast on abort
+          fakeClock = 0;
+          locationReadyAt = 400;
+          const metaPanel = {{
+            offsetParent: {{}},
+            innerText: "Details\\n2023",
+            closest: () => metaPanel,
+            querySelectorAll: () => [],
+            querySelector: (s) => (s.includes("maps") && fakeClock >= locationReadyAt ? {{ parentElement: {{ innerText: "Kyoto, Japan", parentElement: null }} }} : null)
+          }};
+          dls = [metaPanel];
+          const meta = await dom.extractMetadataWithStabilization();
+          if (meta.location !== "Kyoto, Japan") throw new Error("Expected stabilization to wait for Kyoto location: " + JSON.stringify(meta));
+          globalThis.__wphotoIsBatchAborted = () => true;
+          const clockBeforeAbort = fakeClock;
+          await dom.extractMetadataWithStabilization();
+          if (fakeClock !== clockBeforeAbort) throw new Error("Expected stabilization to stop immediately when aborted");
+
+          print("DOM_05_OK");
+        }})();
+        """
+        assert "DOM_05_OK" in run_jsc(js)
+
+    runner.run_test(
+        "DOM-04",
+        "Info panel failures, flap fallback to 'i' shortcut & CDP click, SVG button fallback, timeout & abort",
+        dom_04,
+    )
+    runner.run_test(
+        "DOM-05",
+        "Textarea timeout, video skip, zero-rect guard, focus retry, CDP reattach, quiescence blur & stabilization",
+        dom_05,
     )
 
     # -------------------------------------------------------------------------
@@ -1125,6 +1583,22 @@ def main():
             throw new Error("Expected exhausted 429 after 3 retries (4 calls), got: " + JSON.stringify({{ resExhausted, fetchAttempt }}));
           }}
 
+          // Case 3: Network AbortError when batch is NOT aborted -> gemini_fetch_timeout (not batch_aborted)
+          globalThis.fetch = async () => {{
+            const err = new Error("timed out");
+            err.name = "AbortError";
+            throw err;
+          }};
+          const resTimeout = await window.WPhotoAiEngine.callGeminiCloud({{
+            apiKey: "TEST_KEY_429",
+            rules: "",
+            instruction: "Describe.",
+            lang: "en"
+          }});
+          if (resTimeout.error !== "gemini_fetch_timeout") {{
+            throw new Error("Expected gemini_fetch_timeout on AbortError when not aborted, got: " + JSON.stringify(resTimeout));
+          }}
+
           print("AI_03_OK");
         }})();
         """
@@ -1360,6 +1834,286 @@ def main():
         ai_04,
     )
 
+    def ai_05():
+        js = f"""
+        globalThis.window = globalThis;
+        let fakeClock = 0;
+        let timerSeq = 0;
+        const activeTimers = new Set();
+        globalThis.performance = {{ now: () => fakeClock }};
+        globalThis.setTimeout = (fn, ms) => {{
+          const id = ++timerSeq;
+          activeTimers.add(id);
+          Promise.resolve().then(() => {{
+            if (!activeTimers.has(id)) return;
+            activeTimers.delete(id);
+            fakeClock += (ms || 50);
+            fn();
+          }});
+          return id;
+        }};
+        globalThis.clearTimeout = (id) => {{ activeTimers.delete(id); }};
+        globalThis.location = {{ origin: "https://photos.google.com", pathname: "/photo/P_ERR" }};
+
+        let listenerDelta = 0;
+        globalThis.addEventListener = () => {{ listenerDelta++; }};
+        globalThis.removeEventListener = () => {{ listenerDelta--; }};
+
+        let fetchCount = 0;
+        let hasMainImg = true;
+        let hasVideo = false;
+        let apiKey = "KEY_OK";
+        globalThis.fetch = async () => {{ fetchCount++; return {{ ok: true, status: 200, json: async () => ({{}}) }}; }};
+        globalThis.chrome = {{
+          storage: {{ local: {{ get: async () => (apiKey ? {{ geminiApiKey: apiKey }} : ({{}})), set: async () => {{}} }} }}
+        }};
+        globalThis.document = {{
+          querySelector: (s) => (s === "video" && hasVideo ? {{}} : null),
+          querySelectorAll: (s) => (s === "img" && hasMainImg ? [{{ src: "https://lh3.googleusercontent.com/main", naturalWidth: 1200, naturalHeight: 800, offsetParent: {{}} }}] : [])
+        }};
+
+        load({prompts_file});
+        load({dom_file});
+        load({ai_file});
+
+        let panelRes = {{ ok: true }};
+        let panelCalls = 0;
+        let readOnlyUnowned = false;
+        let notFoundPage = false;
+        let throwInPanel = false;
+        window.WPhotoDomCaption.isPhotoNotFoundPage = () => notFoundPage;
+        window.WPhotoDomCaption.isInfoPanelReadOnlyUnowned = async () => readOnlyUnowned;
+        window.WPhotoDomCaption.findVisibleDescriptionTextarea = () => ({{ value: "" }});
+        window.WPhotoDomCaption.extractMetadataWithStabilization = async () => ({{ people: [], untaggedCount: 0, location: null, year: null }});
+        window.WPhotoDomCaption.ensureInfoPanelOpen = async () => {{
+          panelCalls++;
+          if (throwInPanel) throw new Error("dom_crash");
+          return panelRes;
+        }};
+
+        (async () => {{
+          // 1. info_panel_did_not_open propagates with 0 Gemini fetches
+          panelRes = {{ ok: false, error: "info_panel_did_not_open", detail: "timeout" }};
+          const r1 = await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          if (r1.success || r1.error !== "info_panel_did_not_open" || fetchCount !== 0) {{
+            throw new Error("Expected info_panel_did_not_open propagation: " + JSON.stringify({{ r1, fetchCount }}));
+          }}
+
+          // 2. info_button_not_found with vs without main image
+          panelRes = {{ ok: false, error: "info_button_not_found" }};
+          const r2WithImg = await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          if (r2WithImg.error !== "info_button_not_found") throw new Error("Expected info_button_not_found when img present");
+          hasMainImg = false;
+          fakeClock = 0;
+          const r2NoImg = await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          if (r2NoImg.error !== "skipped_unowned" || fakeClock >= 2000) {{
+            throw new Error("Expected skipped_unowned and early ~1200ms pre-hydrate break: " + JSON.stringify({{ r2NoImg, fakeClock }}));
+          }}
+
+          // 3. Read-only unowned panel skips before cloud fetch
+          hasMainImg = true;
+          panelRes = {{ ok: true }};
+          readOnlyUnowned = true;
+          const r3 = await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          if (r3.error !== "skipped_unowned" || fetchCount !== 0) throw new Error("Expected skipped_unowned on read-only panel");
+          readOnlyUnowned = false;
+
+          // 4. Video and not-found fast-fails avoid calling ensureInfoPanelOpen
+          panelCalls = 0;
+          hasVideo = true;
+          const rVid = await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          hasVideo = false;
+          notFoundPage = true;
+          const rNf = await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          notFoundPage = false;
+          if (rVid.error !== "skipped_video" || rNf.error !== "skipped_unowned" || panelCalls !== 0) {{
+            throw new Error("Expected fast-fail before panel open: " + JSON.stringify({{ rVid, rNf, panelCalls }}));
+          }}
+
+          // 5. Missing Gemini API key -> skipped_cloud_error
+          apiKey = "";
+          const rNoKey = await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          if (rNoKey.error !== "skipped_cloud_error" || !String(rNoKey.errorDetail).includes("missing_gemini_api_key")) {{
+            throw new Error("Expected missing_gemini_api_key detail: " + JSON.stringify(rNoKey));
+          }}
+
+          // 6. Listener cleanup on unexpected exception
+          throwInPanel = true;
+          let threw = false;
+          try {{
+            await window.WPhotoAiEngine.runAiDescription({{ photoId: "P_ERR", model: "cloud" }});
+          }} catch (e) {{
+            threw = e.message === "dom_crash";
+          }}
+          if (!threw || listenerDelta !== 0) {{
+            throw new Error("Expected listeners cleaned up on throw, delta=" + listenerDelta);
+          }}
+
+          print("AI_05_OK");
+        }})();
+        """
+        assert "AI_05_OK" in run_jsc(js)
+
+    def ai_06():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.performance = {{ now: () => Date.now() }};
+        const timers = new Map();
+        let tSeq = 0;
+        let respondNano = false;
+        globalThis.setTimeout = (fn, ms) => {{
+          const id = ++tSeq;
+          timers.set(id, fn);
+          if (respondNano && ms >= 3000) return id;
+          Promise.resolve().then(() => {{
+            if (!timers.has(id)) return;
+            timers.delete(id);
+            fn();
+          }});
+          return id;
+        }};
+        globalThis.clearTimeout = (id) => {{ timers.delete(id); }};
+        globalThis.location = {{ origin: "https://photos.google.com", pathname: "/photo/NANO_1" }};
+
+        let msgListeners = [];
+        globalThis.addEventListener = (ev, fn) => {{ if (ev === "message") msgListeners.push(fn); }};
+        globalThis.removeEventListener = (ev, fn) => {{ msgListeners = msgListeners.filter((f) => f !== fn); }};
+        globalThis.postMessage = (data) => {{
+          if (!respondNano || !data || data.ns !== "wphotoNano") return;
+          Promise.resolve().then(() => {{
+            const reply = data.op === "probe"
+              ? {{ ns: "wphotoNanoReply", id: data.id, status: "available" }}
+              : {{ ns: "wphotoNanoReply", id: data.id, text: "A photo of the Seine at twilight." }};
+            for (const fn of [...msgListeners]) fn({{ source: globalThis.window, data: reply }});
+          }});
+        }};
+
+        let injectCount = 0;
+        let logStorage = "";
+        let pendingLogGetCb = null;
+        let holdLogGet = false;
+        globalThis.chrome = {{
+          runtime: {{
+            sendMessage: (msg, cb) => {{
+              if (msg.type === "BATCH_NANO_INJECT") injectCount++;
+              cb && cb({{ ok: true }});
+            }}
+          }},
+          storage: {{
+            local: {{
+              get: (k, cb) => {{
+                if (holdLogGet && k === "aiDescriptionVerboseLog" && cb) {{
+                  pendingLogGetCb = cb;
+                  return null;
+                }}
+                const res = {{ aiDescriptionVerboseLog: logStorage }};
+                if (cb) cb(res);
+                return Promise.resolve(res);
+              }},
+              set: (obj, cb) => {{
+                if ("aiDescriptionVerboseLog" in obj) logStorage = obj.aiDescriptionVerboseLog;
+                if (cb) cb();
+                return Promise.resolve();
+              }}
+            }}
+          }}
+        }};
+
+        globalThis.document = {{
+          querySelector: () => null,
+          querySelectorAll: (s) => (s === "img" ? [{{ src: "https://lh3.googleusercontent.com/n", naturalWidth: 1000, naturalHeight: 800, offsetParent: {{}} }}] : [])
+        }};
+
+        let sentBodies = [];
+        let fetchMode = "all_400";
+        globalThis.fetch = async (url, init) => {{
+          sentBodies.push(JSON.parse(init.body));
+          if (fetchMode === "all_400") return {{ ok: false, status: 400, text: async () => "Bad API key" }};
+          if (fetchMode === "400_then_200" && sentBodies.length === 1) return {{ ok: false, status: 400, text: async () => "Unknown field thinkingConfig" }};
+          return {{ ok: true, status: 200, json: async () => ({{ candidates: [{{ content: {{ parts: [{{ text: "Canal in Venice." }}] }} }}] }}) }};
+        }};
+
+        load({prompts_file});
+        load({dom_file});
+        load({ai_file});
+
+        let savedText = null;
+        window.WPhotoDomCaption.ensureInfoPanelOpen = async () => ({{ ok: true }});
+        window.WPhotoDomCaption.findVisibleDescriptionTextarea = () => ({{ value: "" }});
+        window.WPhotoDomCaption.extractMetadataWithStabilization = async () => ({{ people: [], untaggedCount: 0, location: null, year: null }});
+        window.WPhotoDomCaption.runCaption = async ({{ text }}) => {{
+          savedText = text;
+          return {{ success: true, timing: {{ textareaVisibleMs: 1, focusToInsertMs: 1, blurToSettleMs: 1, retried: false }} }};
+        }};
+
+        (async () => {{
+          // 1. Both 400 (bad key) must NOT disable thinkingConfig on next valid call
+          await window.WPhotoAiEngine.callGeminiCloud({{ apiKey: "BAD", instruction: "Describe." }});
+          sentBodies = [];
+          fetchMode = "400_then_200";
+          const okAfterBadKey = await window.WPhotoAiEngine.callGeminiCloud({{ apiKey: "GOOD", instruction: "Describe." }});
+          if (okAfterBadKey.error || sentBodies.length !== 2 || !sentBodies[0].generationConfig.thinkingConfig || sentBodies[1].generationConfig.thinkingConfig) {{
+            throw new Error("Expected thinkingConfig kept after 400+400 and stripped on 400+200: " + JSON.stringify(sentBodies));
+          }}
+          // Next call skips thinkingConfig in 1 request
+          sentBodies = [];
+          fetchMode = "ok";
+          await window.WPhotoAiEngine.callGeminiCloud({{ apiKey: "GOOD", instruction: "Describe." }});
+          if (sentBodies.length !== 1 || sentBodies[0].generationConfig.thinkingConfig) {{
+            throw new Error("Expected thinkingConfig to stay disabled after 400->200 fallback: " + JSON.stringify(sentBodies));
+          }}
+
+          // 2. Pre-aborted batch skips fetch
+          sentBodies = [];
+          globalThis.__wphotoIsBatchAborted = () => true;
+          const rAborted = await window.WPhotoAiEngine.callGeminiCloud({{ apiKey: "GOOD", instruction: "Describe." }});
+          if (rAborted.error !== "batch_aborted" || sentBodies.length !== 0) {{
+            throw new Error("Expected batch_aborted without calling fetch: " + JSON.stringify(rAborted));
+          }}
+          globalThis.__wphotoIsBatchAborted = () => false;
+
+          // 3. Local Nano success cleans caption and sets usedAi=true
+          respondNano = true;
+          const rNanoOk = await window.WPhotoAiEngine.runAiDescription({{ photoId: "NANO_1", model: "local", lang: "en" }});
+          if (!rNanoOk.success || !rNanoOk.timing.usedAi || savedText !== "The Seine at twilight.") {{
+            throw new Error("Expected Local Nano success with cleaned caption: " + JSON.stringify({{ rNanoOk, savedText }}));
+          }}
+
+          // 4. Local Nano timeout resets nanoInjectedOrigin (re-injects on next probe) and skips with no metadata
+          respondNano = false;
+          const beforeInjects = injectCount;
+          const rNanoTimeout = await window.WPhotoAiEngine.runAiDescription({{ photoId: "NANO_1", model: "local", lang: "en" }});
+          await window.WPhotoAiEngine.probeNanoAvailability();
+          if (rNanoTimeout.success || rNanoTimeout.error !== "skipped_no_metadata" || injectCount <= beforeInjects) {{
+            throw new Error("Expected Local Nano timeout to fall back to skipped_no_metadata and re-inject: " + JSON.stringify({{ rNanoTimeout, beforeInjects, injectCount }}));
+          }}
+
+          // 5. clearAiDescLog invalidates in-flight stale log flush
+          holdLogGet = true;
+          window.WPhotoAiEngine.appendAiDescLog("stale_line");
+          holdLogGet = false;
+          await window.WPhotoAiEngine.clearAiDescLog();
+          pendingLogGetCb({{ aiDescriptionVerboseLog: "" }});
+          if (logStorage !== "") {{
+            throw new Error("Expected stale log flush after clearAiDescLog to be dropped, got: " + logStorage);
+          }}
+
+          print("AI_06_OK");
+        }})();
+        """
+        assert "AI_06_OK" in run_jsc(js)
+
+    runner.run_test(
+        "AI-05",
+        "Info panel failure propagation, unowned/video fast-fail, pre-hydration break, missing key & listener cleanup",
+        ai_05,
+    )
+    runner.run_test(
+        "AI-06",
+        "Cloud 400 thinkingConfig fallback vs bad key, batch abort, Local Nano success/timeout & log clear race",
+        ai_06,
+    )
+
     # -------------------------------------------------------------------------
     # Suite 6: Batch Runner & Single-Menu UI (API Key Only Settings, No Icons)
     # -------------------------------------------------------------------------
@@ -1544,8 +2298,16 @@ def main():
             throw new Error("Expected French menu aria-label 'Menu AI Plus'");
           }}
 
-          // Switch to API Key view in French
+          // Switch to API Key view and verify Show/Hide keeps unsaved draft without mutating state.apiKey
           card.querySelectorAll("button").find((b) => b.textContent === "Clé API").click();
+          const keyInput = card.children.flatMap((c) => c.children || []).find((n) => n.tagName === "INPUT");
+          keyInput.value = "UNSAVED_DRAFT";
+          card.querySelectorAll("button").find((b) => b.textContent === "Afficher").click();
+          if (keyInput.type !== "text" || keyInput.value !== "UNSAVED_DRAFT" || window.WPhotoUi.state.apiKey !== "") {{
+            throw new Error("Show/Hide mutated state.apiKey or lost draft input");
+          }}
+          card.querySelectorAll("button").find((b) => b.textContent === "Masquer").click();
+          if (keyInput.type !== "password") throw new Error("Hide did not restore password input type");
           const frApiButtons = card.querySelectorAll("button").map((b) => b.textContent);
           for (const expectedFrApi of ["Retour", "Afficher", "Enregistrer", "Effacer"]) {{
             if (!frApiButtons.includes(expectedFrApi)) {{
@@ -1747,10 +2509,385 @@ def main():
             throw new Error("Expected return to originUrl /album/A1 after completion, got: " + currentPath);
           }}
 
+          // Out-of-order stack completion (A completes C) advances to B, and rejected step records failure instead of hanging
+          delete storageData.activeBatch;
+          currentPath = "/photo/A";
+          window.WPhotoAiEngine.runAiDescription = async ({{ photoId }}) => {{
+            if (photoId === "A") {{
+              return {{
+                success: true,
+                errorDetail: JSON.stringify({{ extraCompletedIds: ["C"], captionedIds: ["A", "C"] }}),
+                timing: {{}}
+              }};
+            }}
+            if (photoId === "B") throw new Error("boom");
+            return {{ success: true, timing: {{}} }};
+          }};
+          await window.WPhotoBatchRunner.kickOffBatch({{
+            photoIds: ["A", "B", "C"],
+            originUrl: "https://photos.google.com/album/A1"
+          }});
+          if (currentPath !== "/photo/B") {{
+            throw new Error("Expected out-of-order stack completion to target B next, got: " + currentPath);
+          }}
+          await window.WPhotoBatchRunner.continueBatchIfActive();
+          if (!storageData.activeBatch.failedIds.includes("B") || storageData.activeBatch.failureReasons["B"] !== "unexpected_error" || currentPath !== "/album/A1") {{
+            throw new Error("Expected rejected step B to fail cleanly and finish batch: " + JSON.stringify({{ currentPath, batch: storageData.activeBatch }}));
+          }}
+
           print("RUN_01_OK");
         }})();
         """
         assert "RUN_01_OK" in run_jsc(js)
+
+    def ui_02():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.performance = {{ now: () => Date.now() }};
+        const timers = new Map();
+        let tSeq = 0;
+        let autoFireShort = true;
+        globalThis.setTimeout = (fn, ms) => {{
+          const id = ++tSeq;
+          timers.set(id, fn);
+          if (autoFireShort && ms < 2000) {{
+            Promise.resolve().then(() => {{
+              if (!timers.has(id)) return;
+              timers.delete(id);
+              fn();
+            }});
+          }}
+          return id;
+        }};
+        globalThis.clearTimeout = (id) => {{ timers.delete(id); }};
+        globalThis.setInterval = () => 1;
+        globalThis.clearInterval = () => {{}};
+        globalThis.innerWidth = 1280;
+        globalThis.innerHeight = 800;
+        globalThis.addEventListener = () => {{}};
+        globalThis.MutationObserver = class {{ observe() {{}} }};
+        globalThis.getComputedStyle = () => ({{ backgroundColor: "rgb(255, 255, 255)", overflowY: "visible" }});
+        globalThis.location = {{ pathname: "/album/A1", href: "https://photos.google.com/album/A1" }};
+
+        const storageData = {{}};
+        const elementsById = {{}};
+        function makeEl(tag) {{
+          return {{
+            tagName: tag.toUpperCase(),
+            id: "",
+            className: "",
+            textContent: "",
+            innerHTML: "",
+            type: "",
+            value: "",
+            checked: false,
+            disabled: false,
+            style: {{}},
+            attrs: {{}},
+            children: [],
+            listeners: {{}},
+            parentElement: null,
+            offsetParent: {{}},
+            firstChild: null,
+            previousElementSibling: null,
+            nextElementSibling: null,
+            setAttribute(k, v) {{ this.attrs[k] = String(v); }},
+            getAttribute(k) {{ return k in this.attrs ? this.attrs[k] : null; }},
+            removeAttribute(k) {{ delete this.attrs[k]; }},
+            contains(t) {{ return this === t || this.children.some((c) => c.contains(t)); }},
+            appendChild(c) {{ c.parentElement = this; this.children.push(c); this.firstChild = this.children[0]; if (c.id) elementsById[c.id] = c; return c; }},
+            insertBefore(c) {{ return this.appendChild(c); }},
+            remove() {{ if (this.id) delete elementsById[this.id]; this.parentElement = null; }},
+            addEventListener(ev, fn) {{ this.listeners[ev] = fn; }},
+            click() {{ if (this.listeners.click) this.listeners.click({{ stopPropagation: () => {{}} }}); }},
+            getBoundingClientRect() {{ return {{ left: 900, top: 20, right: 1000, bottom: 56, width: 100, height: 36 }}; }},
+            querySelector: () => null,
+            querySelectorAll(sel) {{
+              const out = [];
+              const walk = (n) => {{
+                for (const c of n.children || []) {{
+                  if (sel === "button" && c.tagName === "BUTTON") out.push(c);
+                  walk(c);
+                }}
+              }};
+              walk(this);
+              return out;
+            }}
+          }};
+        }}
+
+        const bodyEl = makeEl("body");
+        let clearBtnMock = null;
+        globalThis.chrome = {{
+          storage: {{
+            local: {{
+              get: async (keys) => {{
+                if (typeof keys === "string") return {{ [keys]: storageData[keys] }};
+                const out = {{}};
+                for (const k of keys || []) out[k] = storageData[k];
+                return out;
+              }},
+              set: async (obj) => {{ Object.assign(storageData, obj); }},
+              remove: async (k) => {{ delete storageData[k]; }}
+            }},
+            onChanged: {{ addListener: () => {{}} }}
+          }},
+          runtime: {{ onMessage: {{ addListener: () => {{}} }}, sendMessage: (m, cb) => cb && cb({{ ok: true }}) }}
+        }};
+        globalThis.document = {{
+          readyState: "complete",
+          documentElement: null,
+          body: bodyEl,
+          createElement: (t) => makeEl(t),
+          getElementById: (id) => elementsById[id] || null,
+          querySelector: (sel) => (sel.includes("Clear selection") ? clearBtnMock : null),
+          querySelectorAll: () => [],
+          addEventListener: () => {{}}
+        }};
+
+        load({prompts_file});
+        load({sel_file});
+        load({dom_file});
+        load({ai_file});
+        load({runner_file});
+        load({ui_file});
+
+        (async () => {{
+          await window.WPhotoDomCaption.sleep(10);
+
+          // 1. Pinned body fallback when no selection bar, anchor, or flex bar
+          const trig = elementsById["wphoto-trigger-btn"];
+          if (!trig || trig.getAttribute("data-pinned") !== "true" || trig.parentElement !== bodyEl) {{
+            throw new Error("Expected pinned body fallback when no header anchor found");
+          }}
+
+          // 2. Selection bar mounting
+          const selContainer = makeEl("div");
+          const shareCluster = makeEl("div");
+          const shareBtn = makeEl("button");
+          const clearBtn = makeEl("button");
+          shareCluster.appendChild(shareBtn);
+          selContainer.appendChild(shareCluster);
+          selContainer.appendChild(clearBtn);
+          selContainer.querySelector = (s) => (s.includes("Share") ? shareBtn : null);
+          clearBtnMock = clearBtn;
+          window.WPhotoUi.ensureTriggerButtonMounted();
+          if (trig.getAttribute("data-placement") !== "selection" || trig.getAttribute("data-pinned") !== null || trig.parentElement !== shareCluster) {{
+            throw new Error("Expected trigger button to mount inside selection container");
+          }}
+          clearBtnMock = null;
+
+          // 3. Missing API key redirects CTA click to apikey view
+          trig.click();
+          let card = elementsById["wphoto-menu-card"];
+          const cta1 = card.querySelectorAll("button").find((b) => b.getAttribute("data-wphoto-primary-cta") === "true");
+          cta1.click();
+          if (window.WPhotoUi.state.view !== "apikey") {{
+            throw new Error("Expected CTA with missing cloud key to switch to apikey view");
+          }}
+
+          // 4. enumerateCurrentAlbum rejection resets enumeratingAlbum=false and re-enables CTA
+          await window.WPhotoUi.saveGeminiApiKey("AIzaSyValidKey");
+          card.querySelectorAll("button").find((b) => b.textContent === "Back").click();
+          window.WPhotoSelection.enumerateCurrentAlbum = async () => {{ throw new Error("rpc_down"); }};
+          const cta2 = card.querySelectorAll("button").find((b) => b.getAttribute("data-wphoto-primary-cta") === "true");
+          await cta2.listeners.click({{ stopPropagation: () => {{}} }}).catch(() => {{}});
+          const ctaAfter = card.querySelectorAll("button").find((b) => b.getAttribute("data-wphoto-primary-cta") === "true");
+          if (window.WPhotoUi.state.enumeratingAlbum !== false || ctaAfter.disabled) {{
+            throw new Error("Expected enumeratingAlbum reset after RPC rejection");
+          }}
+
+          // 5. Async local probe resolving after closeMenu() updates state without reopening card
+          let resolveProbe;
+          window.WPhotoAiEngine.probeNanoAvailability = () => new Promise((r) => {{ resolveProbe = r; }});
+          card.querySelectorAll("button").find((b) => b.textContent === "Local").click();
+          window.WPhotoUi.closeMenu();
+          resolveProbe("available");
+          await window.WPhotoDomCaption.sleep(10);
+          if (window.WPhotoUi.state.nanoStatus !== "available" || elementsById["wphoto-menu-card"]) {{
+            throw new Error("Closed-menu probe reopened card or failed to update nanoStatus");
+          }}
+
+          // 6. Status bar running, paused (no auto-dismiss), and cancelled (auto-dismiss)
+          autoFireShort = false;
+          window.WPhotoUi.state.activeBatch = {{ photoIds: ["P1", "P2"], completedIds: ["P1"], skippedIds: [], failedIds: [], completedAt: null, lastReason: null, options: {{ lang: "en" }} }};
+          window.WPhotoUi.renderStatusBar();
+          const runBtns = elementsById["wphoto-status-bar"].querySelectorAll("button").map((b) => b.textContent);
+          if (!runBtns.includes("Pause") || !runBtns.includes("Cancel")) throw new Error("Running status bar missing Pause/Cancel");
+
+          const timersBeforePause = timers.size;
+          window.WPhotoUi.state.activeBatch = {{ photoIds: ["P1", "P2"], completedIds: ["P1"], skippedIds: [], failedIds: [], completedAt: Date.now(), lastReason: "paused", options: {{ lang: "en" }} }};
+          window.WPhotoUi.renderStatusBar();
+          const pauseBtns = elementsById["wphoto-status-bar"].querySelectorAll("button").map((b) => b.textContent);
+          if (!pauseBtns.includes("Resume") || timers.size !== timersBeforePause) throw new Error("Paused status bar invalid or scheduled auto-dismiss");
+
+          window.WPhotoUi.state.activeBatch = {{ photoIds: ["P1", "P2"], completedIds: [], skippedIds: [], failedIds: [], completedAt: Date.now(), lastReason: "cancelled", options: {{ lang: "en" }} }};
+          window.WPhotoUi.renderStatusBar();
+          for (const [id, fn] of [...timers]) {{ timers.delete(id); fn(); }}
+          if (elementsById["wphoto-status-bar"]) throw new Error("Expected cancelled status bar to auto-dismiss");
+
+          print("UI_02_OK");
+        }})();
+        """
+        assert "UI_02_OK" in run_jsc(js)
+
+    def run_02():
+        js = f"""
+        globalThis.window = globalThis;
+        globalThis.performance = {{ now: () => Date.now() }};
+        const timers = new Map();
+        let tSeq = 0;
+        globalThis.setTimeout = (fn) => {{
+          const id = ++tSeq;
+          timers.set(id, fn);
+          Promise.resolve().then(() => {{
+            if (!timers.has(id)) return;
+            timers.delete(id);
+            fn();
+          }});
+          return id;
+        }};
+        globalThis.clearTimeout = (id) => {{ timers.delete(id); }};
+        globalThis.addEventListener = () => {{}};
+
+        let currentPath = "/photo/P_TO";
+        let reloaded = false;
+        let attachResp = {{ ok: true }};
+        let detachCount = 0;
+        let unexpectedDetachCb = null;
+        const storageData = {{}};
+        globalThis.location = {{
+          get pathname() {{ return currentPath; }},
+          get href() {{ return "https://photos.google.com" + currentPath; }},
+          set href(v) {{ const m = v.match(/https:\\/\\/photos\\.google\\.com(\\/.*)$/); currentPath = m ? m[1] : v; }},
+          reload() {{ reloaded = true; }}
+        }};
+        globalThis.chrome = {{
+          storage: {{
+            local: {{
+              get: async (k) => (typeof k === "string" ? {{ [k]: storageData[k] }} : ({{ ...storageData }})),
+              set: async (o) => {{ Object.assign(storageData, o); }},
+              remove: async (k) => {{ delete storageData[k]; }}
+            }},
+            onChanged: {{ addListener: () => {{}} }}
+          }},
+          runtime: {{
+            onMessage: {{ addListener: (fn) => {{ unexpectedDetachCb = fn; }} }},
+            sendMessage: (msg, cb) => {{
+              if (msg.type === "BATCH_ATTACH") return cb && cb(attachResp);
+              if (msg.type === "BATCH_DETACH") detachCount++;
+              cb && cb({{ ok: true }});
+            }}
+          }}
+        }};
+        globalThis.document = {{ documentElement: null }};
+
+        load({prompts_file});
+        load({sel_file});
+        load({dom_file});
+        load({ai_file});
+        load({runner_file});
+
+        (async () => {{
+          // 1. Wall-clock timeout aborts active controller, records photo_timeout, and advances
+          let ctrlAborted = false;
+          window.WPhotoAiEngine.runAiDescription = async ({{ photoId }}) => {{
+            if (photoId === "P_TO") {{
+              window.__wphotoActiveAbortController = {{ abort() {{ ctrlAborted = true; }} }};
+              return new Promise(() => {{}});
+            }}
+            if (photoId === "P_PANEL") return {{ success: false, error: "info_panel_did_not_open", timing: {{}} }};
+            if (photoId === "P_VID") return {{ success: false, error: "skipped_video", timing: {{}} }};
+            if (photoId === "P_UNOWNED") return {{ success: false, error: "skipped_unowned", timing: {{}} }};
+            return {{ success: true, timing: {{}} }};
+          }};
+          await window.WPhotoBatchRunner.kickOffBatch({{
+            photoIds: ["P_TO", "P_PANEL", "P_VID", "P_UNOWNED"],
+            originUrl: "https://photos.google.com/album/A1"
+          }});
+          if (!ctrlAborted || storageData.activeBatch.failureReasons["P_TO"] !== "photo_timeout" || currentPath !== "/photo/P_PANEL") {{
+            throw new Error("Expected wall-clock timeout recovery to P_PANEL: " + JSON.stringify({{ ctrlAborted, currentPath, batch: storageData.activeBatch }}));
+          }}
+
+          // 2. info_panel_did_not_open retries once via reload, then fails on attempt 2 and advances
+          await window.WPhotoBatchRunner.continueBatchIfActive();
+          if (!reloaded || storageData.activeBatch.retryPhotoIds["P_PANEL"] !== 1 || currentPath !== "/photo/P_PANEL") {{
+            throw new Error("Expected 1x reload retry on info_panel_did_not_open");
+          }}
+          reloaded = false;
+          await window.WPhotoBatchRunner.continueBatchIfActive();
+          if (reloaded || !storageData.activeBatch.failedIds.includes("P_PANEL") || storageData.activeBatch.failureReasons["P_PANEL"] !== "info_panel_did_not_open" || currentPath !== "/photo/P_VID") {{
+            throw new Error("Expected info_panel_did_not_open retry exhaustion to fail and advance to P_VID");
+          }}
+
+          // 3. Skip codes advance without failure and finish to origin
+          await window.WPhotoBatchRunner.continueBatchIfActive();
+          await window.WPhotoBatchRunner.continueBatchIfActive();
+          if (storageData.activeBatch.skippedIds.length !== 2 || storageData.activeBatch.failedIds.length !== 2 || currentPath !== "/album/A1") {{
+            throw new Error("Expected skipped_video & skipped_unowned to finish batch cleanly: " + JSON.stringify({{ currentPath, batch: storageData.activeBatch }}));
+          }}
+
+          // 4. BATCH_ATTACH failure on kickOff and detached_by_user during step
+          attachResp = {{ ok: false, error: "attach_denied" }};
+          const koFail = await window.WPhotoBatchRunner.kickOffBatch({{ photoIds: ["X1"], originUrl: "https://photos.google.com/album/A1" }});
+          if (koFail.started || storageData.activeBatch.lastReason !== "dom_abort") {{
+            throw new Error("Expected dom_abort on kickOff attach failure");
+          }}
+
+          attachResp = {{ ok: true }};
+          currentPath = "/photo/X1";
+          window.WPhotoAiEngine.runAiDescription = async () => {{
+            attachResp = {{ ok: false, error: "detached_by_user" }};
+            return {{ success: true, timing: {{}} }};
+          }};
+          const prevDetach = detachCount;
+          await window.WPhotoBatchRunner.kickOffBatch({{ photoIds: ["X1", "X2"], originUrl: "https://photos.google.com/album/A1" }});
+          // Now simulate step attach returning detached_by_user on X2
+          await window.WPhotoBatchRunner.continueBatchIfActive();
+          if (storageData.activeBatch.lastReason !== "cancelled" || detachCount <= prevDetach) {{
+            throw new Error("Expected detached_by_user to cancel batch and detach");
+          }}
+
+          // 5. cancelBatch and BATCH_UNEXPECTED_DETACH behavior (active vs completed)
+          attachResp = {{ ok: true }};
+          currentPath = "/photo/C1";
+          let holdResolve;
+          let resolveEntered;
+          const pEntered = new Promise((r) => {{ resolveEntered = r; }});
+          window.WPhotoAiEngine.runAiDescription = () => {{
+            resolveEntered();
+            return new Promise((r) => {{ holdResolve = r; }});
+          }};
+          const pRun = window.WPhotoBatchRunner.kickOffBatch({{ photoIds: ["C1", "C2"], originUrl: "https://photos.google.com/album/A1" }});
+          await pEntered;
+          await window.WPhotoBatchRunner.cancelBatch();
+          holdResolve({{ success: false, error: "batch_aborted" }});
+          await pRun;
+          if (storageData.activeBatch.lastReason !== "cancelled") throw new Error("cancelBatch failed");
+
+          // Unexpected detach preserves finished batch
+          storageData.activeBatch = {{ photoIds: ["Z1"], completedIds: ["Z1"], failedIds: [], skippedIds: [], completedAt: 999, lastReason: null }};
+          unexpectedDetachCb({{ type: "BATCH_UNEXPECTED_DETACH" }});
+          await window.WPhotoDomCaption.sleep(5);
+          if (storageData.activeBatch.lastReason !== null) throw new Error("BATCH_UNEXPECTED_DETACH overwrote finished batch");
+
+          // 6. photoIdStillPending Top-Pick redirect fallback schedules P1 before P2
+          delete storageData.activeBatch;
+          currentPath = "/photo/P1";
+          window.WPhotoAiEngine.runAiDescription = async ({{ photoId }}) => ({{
+            success: true,
+            errorDetail: photoId === "P1" ? JSON.stringify({{ pendingStackIds: ["P1"], captionedIds: ["T1"], sharedCaption: "Stack shared." }}) : undefined,
+            timing: {{}}
+          }});
+          await window.WPhotoBatchRunner.kickOffBatch({{ photoIds: ["P1", "P2"], originUrl: "https://photos.google.com/album/A1" }});
+          if (currentPath !== "/photo/P1" || storageData.activeBatch.prefilledCaptions["P1"] !== "Stack shared." || !storageData.activeBatch.completedIds.includes("T1")) {{
+            throw new Error("Expected photoIdStillPending fallback to schedule P1 with prefilledCaption: " + JSON.stringify({{ currentPath, batch: storageData.activeBatch }}));
+          }}
+
+          print("RUN_02_OK");
+        }})();
+        """
+        assert "RUN_02_OK" in run_jsc(js)
 
     runner.run_test(
         "UI-01",
@@ -1758,9 +2895,19 @@ def main():
         ui_01,
     )
     runner.run_test(
+        "UI-02",
+        "Selection bar mounting, pinned fallback, missing-key redirect, album RPC error recovery & status bar states",
+        ui_02,
+    )
+    runner.run_test(
         "RUN-01",
         "Batch state machine handles kickOff, 1x transient reload retry, pause/resume, and return to origin",
         run_01,
+    )
+    runner.run_test(
+        "RUN-02",
+        "Batch runner wall-clock timeout, info-panel retry exhaustion, skip codes, attach abort & stack fallback",
+        run_02,
     )
 
     bg_file = json.dumps(os.path.join(ext_dir, "background/background.js"))
@@ -1856,15 +3003,235 @@ def main():
             throw new Error("Expected explicitStart BATCH_ATTACH to succeed");
           }}
 
+          // Repeated attach on already-attached tab must NOT duplicate addScriptToEvaluateOnNewDocument
+          const scriptsBefore = cdpSent.filter((c) => c.method === "Page.addScriptToEvaluateOnNewDocument").length;
+          const rReattach = await sendMsg({{ type: "BATCH_ATTACH" }});
+          const scriptsAfter = cdpSent.filter((c) => c.method === "Page.addScriptToEvaluateOnNewDocument").length;
+          if (!rReattach.ok || scriptsAfter !== scriptsBefore) {{
+            throw new Error("Repeated attach duplicated addScriptToEvaluateOnNewDocument");
+          }}
+
+          // Superseded quiescence wait resolves previous caller cleanly instead of returning already_waiting
+          const pWait1 = sendMsg({{ type: "BATCH_AWAIT_SAVE_QUIESCENCE", idleMs: 5000, maxWaitMs: 5000 }});
+          const pWait2 = sendMsg({{ type: "BATCH_AWAIT_SAVE_QUIESCENCE", idleMs: 10, maxWaitMs: 100 }});
+          const [w1, w2] = await Promise.all([pWait1, pWait2]);
+          if (!w1.ok || w1.reason !== "superseded" || !w2.ok) {{
+            throw new Error("Quiescence supersede failed: " + JSON.stringify({{ w1, w2 }}));
+          }}
+
+          // Detach must NOT overwrite an already-finished batch (completedAt !== null, lastReason === null)
+          let savedDetached = null;
+          globalThis.chrome.storage = {{
+            local: {{
+              get: (k, cb) => cb({{ activeBatch: {{ completedAt: 12345, lastReason: null }} }}),
+              set: (obj) => {{ savedDetached = obj.activeBatch; }}
+            }}
+          }};
+          onDetachHandler({{ tabId: 42 }}, "canceled_by_user");
+          if (savedDetached !== null) {{
+            throw new Error("onDetach overwrote completed batch: " + JSON.stringify(savedDetached));
+          }}
+
           print("BG_01_OK");
         }})();
         """
         assert "BG_01_OK" in run_jsc(js)
 
+    def bg_02():
+        js = f"""
+        let fakeNow = 100000;
+        Date.now = () => fakeNow;
+        let tSeq = 0;
+        const timers = new Map();
+        globalThis.setTimeout = (fn, ms) => {{
+          const id = ++tSeq;
+          timers.set(id, {{ fn, ms: ms ?? 0 }});
+          if ((ms ?? 0) < 100) {{
+            Promise.resolve().then(() => {{
+              if (!timers.has(id)) return;
+              timers.delete(id);
+              fn();
+            }});
+          }}
+          return id;
+        }};
+        globalThis.clearTimeout = (id) => {{ timers.delete(id); }};
+        const advanceTimers = (upToMs) => {{
+          for (const [id, entry] of [...timers].sort((a, b) => a[1].ms - b[1].ms)) {{
+            if (entry.ms <= upToMs && timers.has(id)) {{
+              timers.delete(id);
+              fakeNow += entry.ms;
+              entry.fn();
+            }}
+          }}
+        }};
+
+        let onMessageHandler = null;
+        let onEventHandler = null;
+        let attachCalls = 0;
+        let pendingAttachCbs = [];
+        let holdAttach = false;
+        let failEvalOnce = false;
+        let failNextClick = false;
+        let cdpSent = [];
+        let storedBatch = null;
+
+        globalThis.chrome = {{
+          storage: {{
+            local: {{
+              get: async () => ({{ activeBatch: storedBatch }}),
+              set: async () => {{}}
+            }}
+          }},
+          runtime: {{
+            lastError: null,
+            onMessage: {{ addListener(fn) {{ onMessageHandler = fn; }} }}
+          }},
+          tabs: {{ sendMessage: () => Promise.resolve() }},
+          scripting: {{ executeScript: async () => [{{}}] }},
+          debugger: {{
+            onEvent: {{ addListener(fn) {{ onEventHandler = fn; }} }},
+            onDetach: {{ addListener() {{}} }},
+            attach(target, ver, cb) {{
+              attachCalls++;
+              if (holdAttach) pendingAttachCbs.push(cb);
+              else cb();
+            }},
+            detach(target, cb) {{ cb(); }},
+            sendCommand(target, method, params, cb) {{
+              cdpSent.push({{ method, params }});
+              if (failEvalOnce && method === "Runtime.evaluate") {{
+                failEvalOnce = false;
+                globalThis.chrome.runtime.lastError = {{ message: "Debugger is not attached" }};
+                cb();
+                globalThis.chrome.runtime.lastError = null;
+                return;
+              }}
+              if (failNextClick && method === "Input.dispatchMouseEvent") {{
+                failNextClick = false;
+                globalThis.chrome.runtime.lastError = {{ message: "Debugger is not attached" }};
+                cb();
+                globalThis.chrome.runtime.lastError = null;
+                return;
+              }}
+              cb({{}});
+            }}
+          }}
+        }};
+
+        load({bg_file});
+        const sendMsg = (msg, tabId = 7) => new Promise((r) => onMessageHandler(msg, {{ tab: {{ id: tabId }} }}, r));
+
+        (async () => {{
+          // 1. Not attached rejects commands cleanly
+          const rNoAttach = await sendMsg({{ type: "BATCH_DISPATCH_CLICK_AT", x: 1, y: 1 }});
+          if (rNoAttach.ok || rNoAttach.error !== "not_attached") throw new Error("Expected not_attached error");
+
+          // 2. Concurrent BATCH_ATTACH serializes into a single chrome.debugger.attach
+          holdAttach = true;
+          const pA1 = sendMsg({{ type: "BATCH_ATTACH" }});
+          const pA2 = sendMsg({{ type: "BATCH_ATTACH" }});
+          await Promise.resolve();
+          while (pendingAttachCbs.length === 0) await Promise.resolve();
+          holdAttach = false;
+          pendingAttachCbs.shift()();
+          const [rA1, rA2] = await Promise.all([pA1, pA2]);
+          if (!rA1.ok || !rA2.ok || attachCalls !== 1) {{
+            throw new Error("Expected concurrent attach serialization (1 attach call): " + JSON.stringify({{ rA1, rA2, attachCalls }}));
+          }}
+
+          // 3. Quiescence ceiling timeout when XHR never finishes
+          const pCeiling = sendMsg({{ type: "BATCH_AWAIT_SAVE_QUIESCENCE", idleMs: 200, maxWaitMs: 1000 }});
+          onEventHandler({{ tabId: 7 }}, "Network.requestWillBeSent", {{
+            requestId: "hung1",
+            request: {{ url: "https://photos.google.com/_/PhotosUi/data/batchexecute?rpcids=save" }}
+          }});
+          advanceTimers(1000);
+          const rCeiling = await pCeiling;
+          if (!rCeiling.ok || rCeiling.reason !== "ceiling" || rCeiling.saveXhrsObserved !== 1) {{
+            throw new Error("Expected quiescence ceiling timeout: " + JSON.stringify(rCeiling));
+          }}
+
+          // 4. Stale (>15s) in-flight XHR gets pruned so quiescence resolves idle
+          fakeNow += 16000;
+          const pPruned = sendMsg({{ type: "BATCH_AWAIT_SAVE_QUIESCENCE", idleMs: 100, maxWaitMs: 1000 }});
+          advanceTimers(100);
+          const rPruned = await pPruned;
+          if (!rPruned.ok || rPruned.reason !== "idle") {{
+            throw new Error("Expected stale XHR pruning to resolve idle: " + JSON.stringify(rPruned));
+          }}
+
+          // 5. Ignored telemetry rJ0tlb and Network.loadingFailed
+          onEventHandler({{ tabId: 7 }}, "Network.requestWillBeSent", {{
+            requestId: "tel1",
+            request: {{ url: "https://photos.google.com/_/PhotosUi/data/batchexecute?rpcids=rJ0tlb" }}
+          }});
+          onEventHandler({{ tabId: 7 }}, "Network.requestWillBeSent", {{
+            requestId: "fail1",
+            request: {{ url: "https://photos.google.com/_/PhotosUi/data/batchexecute?rpcids=save" }}
+          }});
+          onEventHandler({{ tabId: 7 }}, "Network.loadingFailed", {{ requestId: "fail1" }});
+          fakeNow += 200;
+          const pFailIdle = sendMsg({{ type: "BATCH_AWAIT_SAVE_QUIESCENCE", idleMs: 100, maxWaitMs: 1000 }});
+          advanceTimers(100);
+          const rFailIdle = await pFailIdle;
+          if (!rFailIdle.ok || rFailIdle.reason !== "idle" || rFailIdle.saveXhrsObserved !== 0) {{
+            throw new Error("Expected telemetry ignore & loadingFailed idle: " + JSON.stringify(rFailIdle));
+          }}
+
+          // 6. JS dialog auto-accept
+          onEventHandler({{ tabId: 7 }}, "Page.javascriptDialogOpening", {{}});
+          if (!cdpSent.some((c) => c.method === "Page.handleJavaScriptDialog" && c.params.accept === true)) {{
+            throw new Error("Expected Page.handleJavaScriptDialog accept:true");
+          }}
+
+          // 7. Dead-session recovery on BATCH_ATTACH
+          failEvalOnce = true;
+          const prevAttach = attachCalls;
+          const rRecover = await sendMsg({{ type: "BATCH_ATTACH" }});
+          if (!rRecover.ok || attachCalls !== prevAttach + 1) {{
+            throw new Error("Expected dead session Runtime.evaluate failure to trigger re-attach");
+          }}
+
+          // 8. Mid-dispatch 'Debugger is not attached' clears attachedTabId & resolves pending quiescence
+          const pPendingQ = sendMsg({{ type: "BATCH_AWAIT_SAVE_QUIESCENCE", idleMs: 200, maxWaitMs: 1000 }});
+          failNextClick = true;
+          const rDeadClick = await sendMsg({{ type: "BATCH_DISPATCH_CLICK_AT", x: 10, y: 10 }});
+          const rPendingQ = await pPendingQ;
+          const rStatus = await sendMsg({{ type: "BATCH_GET_STATUS" }});
+          if (rDeadClick.ok || rStatus.attached || !rPendingQ.ok || rPendingQ.reason !== "ceiling") {{
+            throw new Error("Expected mid-dispatch detach error to clear attached state and resolve quiescence");
+          }}
+
+          // 9. forPhotoStep rejects paused/completed batch and BATCH_DETACH cleans up
+          storedBatch = {{ completedAt: null, lastReason: "paused" }};
+          const rInactive = await sendMsg({{ type: "BATCH_ATTACH", forPhotoStep: true }});
+          if (rInactive.ok || rInactive.error !== "batch_not_active") {{
+            throw new Error("Expected batch_not_active for paused batch");
+          }}
+          storedBatch = {{ completedAt: null, lastReason: null }};
+          await sendMsg({{ type: "BATCH_ATTACH", forPhotoStep: true }});
+          const pDetachQ = sendMsg({{ type: "BATCH_AWAIT_SAVE_QUIESCENCE", idleMs: 200, maxWaitMs: 1000 }});
+          await sendMsg({{ type: "BATCH_DETACH" }});
+          const rDetachQ = await pDetachQ;
+          if (!rDetachQ.ok || rDetachQ.reason !== "ceiling") {{
+            throw new Error("Expected BATCH_DETACH to resolve pending quiescence");
+          }}
+
+          print("BG_02_OK");
+        }})();
+        """
+        assert "BG_02_OK" in run_jsc(js)
+
     runner.run_test(
         "BG-01",
         "Background service worker routes CDP attach, click, insertText, save quiescence, and detach events",
         bg_01,
+    )
+    runner.run_test(
+        "BG-02",
+        "Background quiescence ceiling, stale XHR pruning, concurrent/dead-session attach, dialog accept & detach cleanup",
+        bg_02,
     )
 
     elapsed = time.time() - t_start

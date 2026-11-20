@@ -6,19 +6,22 @@
   const MENU_CARD_ID = "wphoto-menu-card";
   const STATUS_BAR_ID = "wphoto-status-bar";
   const STATUS_BAR_AUTO_DISMISS_MS = 4500;
+  const AI_STUDIO_LINK =
+    '<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>';
   let statusAutoDismissTimer = null;
+  let apiKeyStatusTimer = null;
 
   const state = {
     menuOpen: false,
-    view: "main", // "main" | "apikey"
+    view: "main",
     lang: "en",
-    model: "cloud", // "cloud" | "local"
-    overwrite: "no", // "no" | "yes"
+    model: "cloud",
+    overwrite: "no",
     verbose: false,
     apiKey: "",
     showApiKeyPlain: false,
     apiKeyStatusKey: "",
-    nanoStatus: "idle", // "idle" | "available" | "downloadable" | "downloading" | "unavailable"
+    nanoStatus: "idle",
     nanoProgressPct: 0,
     enumeratingAlbum: false,
     activeBatch: null
@@ -52,8 +55,7 @@
       selectPhotos: "Select photos to start",
       apiKeyTitle: "Google AI Studio API Key",
       backBtn: "Back",
-      apiKeyHelperHtml:
-        'Enter your Gemini API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>. Stored locally on this browser only.',
+      apiKeyHelperHtml: `Enter your Gemini API key from ${AI_STUDIO_LINK}. Stored locally on this browser only.`,
       currentKey: (masked) => `Current key: ${masked}`,
       apiKeyInputAria: "Gemini API Key",
       showBtn: "Show",
@@ -67,8 +69,7 @@
         `AI Plus: ${cur} / ${total} (${done} done, ${skipped} skipped)`,
       statusPaused: (processed, total, done, skipped) =>
         `Paused at ${processed} / ${total} (${done} done, ${skipped} skipped)`,
-      statusCancelled: (done, skipped) =>
-        `Cancelled: ${done} described, ${skipped} skipped`,
+      statusCancelled: (done, skipped) => `Cancelled: ${done} described, ${skipped} skipped`,
       statusFinished: (done, skipped, failed) =>
         `Finished: ${done} described, ${skipped} skipped, ${failed} failed`,
       pauseBtn: "Pause",
@@ -103,8 +104,7 @@
       selectPhotos: "Sélectionnez des photos",
       apiKeyTitle: "Clé API Google AI Studio",
       backBtn: "Retour",
-      apiKeyHelperHtml:
-        'Saisissez votre clé API Gemini depuis <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>. Stockée uniquement sur ce navigateur.',
+      apiKeyHelperHtml: `Saisissez votre clé API Gemini depuis ${AI_STUDIO_LINK}. Stockée uniquement sur ce navigateur.`,
       currentKey: (masked) => `Clé actuelle : ${masked}`,
       apiKeyInputAria: "Clé API Gemini",
       showBtn: "Afficher",
@@ -154,8 +154,7 @@
       selectPhotos: "Selecciona fotos",
       apiKeyTitle: "Clave API de Google AI Studio",
       backBtn: "Volver",
-      apiKeyHelperHtml:
-        'Ingresa tu clave API de Gemini desde <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">Google AI Studio</a>. Guardada localmente solo en este navegador.',
+      apiKeyHelperHtml: `Ingresa tu clave API de Gemini desde ${AI_STUDIO_LINK}. Guardada localmente solo en este navegador.`,
       currentKey: (masked) => `Clave actual: ${masked}`,
       apiKeyInputAria: "Clave API de Gemini",
       showBtn: "Mostrar",
@@ -189,8 +188,7 @@
   function maskApiKey(key) {
     if (!key || typeof key !== "string") return "";
     const trimmed = key.trim();
-    if (trimmed.length <= 8) return "••••••••";
-    return `${trimmed.slice(0, 4)}••••••••${trimmed.slice(-4)}`;
+    return trimmed.length <= 8 ? "••••••••" : `${trimmed.slice(0, 4)}••••••••${trimmed.slice(-4)}`;
   }
 
   async function loadStoredPrefs() {
@@ -201,20 +199,14 @@
         "aiDescriptionVerbose",
         "activeBatch"
       ]);
-      if (data?.wphotoPrefs) {
-        const p = data.wphotoPrefs;
+      const p = data?.wphotoPrefs;
+      if (p) {
         if (p.lang && window.WPHOTO_PROMPTS?.[p.lang]) state.lang = p.lang;
         if (p.model === "local" || p.model === "cloud") state.model = p.model;
         if (p.overwrite === "yes" || p.overwrite === "no") state.overwrite = p.overwrite;
       }
-      if (typeof data?.geminiApiKey === "string" && data.geminiApiKey.trim()) {
-        state.apiKey = data.geminiApiKey.trim();
-      } else {
-        state.apiKey = "";
-      }
-      if (typeof data?.aiDescriptionVerbose === "boolean") {
-        state.verbose = data.aiDescriptionVerbose;
-      }
+      state.apiKey = typeof data?.geminiApiKey === "string" ? data.geminiApiKey.trim() : "";
+      if (typeof data?.aiDescriptionVerbose === "boolean") state.verbose = data.aiDescriptionVerbose;
       if (data?.activeBatch) {
         const b = data.activeBatch;
         const isTerminal = b.completedAt !== null && b.lastReason !== "paused";
@@ -233,11 +225,7 @@
   function saveStoredPrefs() {
     try {
       chrome.storage.local.set({
-        wphotoPrefs: {
-          lang: state.lang,
-          model: state.model,
-          overwrite: state.overwrite
-        }
+        wphotoPrefs: { lang: state.lang, model: state.model, overwrite: state.overwrite }
       });
     } catch (e) {}
   }
@@ -257,57 +245,48 @@
     } catch (e) {
       state.apiKeyStatusKey = "keySaveFailed";
     }
+    if (apiKeyStatusTimer) clearTimeout(apiKeyStatusTimer);
     renderMenu();
-    setTimeout(() => {
+    apiKeyStatusTimer = setTimeout(() => {
+      apiKeyStatusTimer = null;
       state.apiKeyStatusKey = "";
       if (state.menuOpen) renderMenu();
     }, 2500);
   }
 
-  function clearGeminiApiKey() {
-    return saveGeminiApiKey("");
-  }
+  const clearGeminiApiKey = () => saveGeminiApiKey("");
 
   function getCtaLabel(lang, summary) {
     const t = getUiStrings(lang);
-    if (state.enumeratingAlbum) {
-      return t.readingAlbum;
-    }
-    if (summary.eligible > 0) {
-      return t.describeCount(summary.eligible);
-    }
-    if (summary.inAlbum) {
-      return t.describeAlbum;
-    }
-    return t.selectPhotos;
+    if (state.enumeratingAlbum) return t.readingAlbum;
+    if (summary.eligible > 0) return t.describeCount(summary.eligible);
+    return summary.inAlbum ? t.describeAlbum : t.selectPhotos;
   }
 
   async function triggerLocalProbe() {
     if (state.model !== "local") return;
     state.nanoStatus = "idle";
     renderMenu();
-    const status = await window.WPhotoAiEngine.probeNanoAvailability();
-    state.nanoStatus = status;
-    renderMenu();
+    state.nanoStatus = await window.WPhotoAiEngine.probeNanoAvailability();
+    if (state.menuOpen) renderMenu();
   }
 
   async function handleDownloadLocalModel() {
+    if (state.nanoStatus === "downloading") return;
     state.nanoStatus = "downloading";
     state.nanoProgressPct = 0;
     renderMenu();
-    const result = await window.WPhotoAiEngine.downloadNanoModel((pct) => {
+    state.nanoStatus = await window.WPhotoAiEngine.downloadNanoModel((pct) => {
       state.nanoProgressPct = pct;
       if (state.menuOpen) renderMenu();
     });
-    state.nanoStatus = result;
     if (state.menuOpen) renderMenu();
   }
 
   async function handleDownloadLog() {
     try {
       const logText = await window.WPhotoAiEngine.getAiDescLog();
-      const blob = new Blob([logText], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(new Blob([logText], { type: "text/plain;charset=utf-8" }));
       const a = document.createElement("a");
       a.href = url;
       a.download = "ai_summary_log.txt";
@@ -321,6 +300,7 @@
   }
 
   async function handleStartBatch() {
+    if (state.enumeratingAlbum) return;
     if (state.model === "cloud" && !state.apiKey) {
       state.view = "apikey";
       renderMenu();
@@ -330,17 +310,19 @@
     const summary = window.WPhotoSelection.getSummary();
     let photoIds = [];
     let skippedIds = [];
-
     if (summary.eligible > 0) {
       photoIds = window.WPhotoSelection.getEligibleIds();
       skippedIds = window.WPhotoSelection.getSkippedIds();
     } else if (summary.inAlbum) {
       state.enumeratingAlbum = true;
       renderMenu();
-      const albumRes = await window.WPhotoSelection.enumerateCurrentAlbum();
-      state.enumeratingAlbum = false;
-      photoIds = albumRes.ids || [];
-      skippedIds = albumRes.skippedIds || [];
+      try {
+        const albumRes = await window.WPhotoSelection.enumerateCurrentAlbum();
+        photoIds = albumRes.ids || [];
+        skippedIds = albumRes.skippedIds || [];
+      } finally {
+        state.enumeratingAlbum = false;
+      }
     }
 
     if (photoIds.length === 0) {
@@ -370,9 +352,8 @@
       return;
     }
     const rect = btn.getBoundingClientRect();
-    const top = Math.max(8, Math.round(rect.bottom + 8));
     const rightSpace = window.innerWidth - rect.right;
-    card.style.top = `${top}px`;
+    card.style.top = `${Math.max(8, Math.round(rect.bottom + 8))}px`;
     if (rightSpace >= 16 && rect.right >= 320) {
       card.style.right = `${Math.max(12, Math.round(rightSpace))}px`;
       card.style.left = "auto";
@@ -384,69 +365,77 @@
 
   function parseColorDarkness(cssColor) {
     if (!cssColor || cssColor === "transparent") return null;
-    const rgb = cssColor.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
-    if (rgb) {
-      const lum = 0.299 * Number(rgb[1]) + 0.587 * Number(rgb[2]) + 0.114 * Number(rgb[3]);
-      return lum < 128;
-    }
-    const rgba = cssColor.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
-    if (rgba) {
-      if (Number(rgba[4]) < 0.5) return null;
-      const lum = 0.299 * Number(rgba[1]) + 0.587 * Number(rgba[2]) + 0.114 * Number(rgba[3]);
-      return lum < 128;
-    }
-    return null;
+    const m = cssColor.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)$/);
+    if (!m || (m[4] !== undefined && Number(m[4]) < 0.5)) return null;
+    return 0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3]) < 128;
   }
 
   function detectGooglePhotosTheme() {
     if (typeof window === "undefined" || typeof document === "undefined") return "light";
     if (typeof getComputedStyle === "function") {
-      if (document.body) {
-        const bodyDark = parseColorDarkness(getComputedStyle(document.body).backgroundColor);
-        if (bodyDark !== null) return bodyDark ? "dark" : "light";
-      }
-      if (document.documentElement) {
-        const docDark = parseColorDarkness(getComputedStyle(document.documentElement).backgroundColor);
-        if (docDark !== null) return docDark ? "dark" : "light";
+      for (const node of [document.body, document.documentElement]) {
+        if (!node) continue;
+        const dark = parseColorDarkness(getComputedStyle(node).backgroundColor);
+        if (dark !== null) return dark ? "dark" : "light";
       }
     }
-    const prefersDark =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches;
-    return prefersDark ? "dark" : "light";
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
   }
 
-  function applyThemeAttr(el) {
-    if (!el) return;
-    el.setAttribute("data-theme", detectGooglePhotosTheme());
+  function applyThemeAttr(node) {
+    node?.setAttribute("data-theme", detectGooglePhotosTheme());
   }
 
   function shouldHideTriggerAndMenu() {
-    if (!window.WPhotoSelection) return true;
-    if (window.WPhotoSelection.parsePhotoIdFromPath()) return true;
+    if (!window.WPhotoSelection || window.WPhotoSelection.parsePhotoIdFromPath()) return true;
     const summary = window.WPhotoSelection.getSummary();
-    if (summary.mode === "viewer") return true;
-    if (!summary.inAlbum && summary.eligible === 0) return true;
-    return false;
+    return summary.mode === "viewer" || (!summary.inAlbum && summary.eligible === 0);
   }
 
   function closeMenu() {
     state.menuOpen = false;
     state.view = "main";
-    const btn = typeof document !== "undefined" ? document.getElementById(TRIGGER_BTN_ID) : null;
-    if (btn) btn.setAttribute("aria-expanded", "false");
-    const existing = typeof document !== "undefined" ? document.getElementById(MENU_CARD_ID) : null;
-    if (existing) existing.remove();
+    if (typeof document === "undefined") return;
+    document.getElementById(TRIGGER_BTN_ID)?.setAttribute("aria-expanded", "false");
+    document.getElementById(MENU_CARD_ID)?.remove();
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function createActionBtn(label, className, onClick) {
+    const btn = el("button", className, label);
+    btn.type = "button";
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function createLabeledSegmentedField(attrName, labelText, options, activeVal, onSelect) {
+    const field = el("div", "wphoto-field");
+    field.setAttribute(attrName, "true");
+    field.appendChild(el("span", "wphoto-label", labelText));
+
+    const group = el("div", "wphoto-segmented");
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", labelText);
+    for (const opt of options) {
+      const btn = createActionBtn(opt.label, "wphoto-seg-btn", () => onSelect(opt.value));
+      btn.setAttribute("aria-pressed", String(opt.value === activeVal));
+      group.appendChild(btn);
+    }
+    field.appendChild(group);
+    return field;
   }
 
   function renderMenu() {
     const hideNow = shouldHideTriggerAndMenu();
     if (!state.menuOpen || typeof document === "undefined" || hideNow) {
-      if (hideNow) {
-        state.menuOpen = false;
-      }
-      const existing = typeof document !== "undefined" ? document.getElementById(MENU_CARD_ID) : null;
-      if (existing) existing.remove();
+      if (hideNow) state.menuOpen = false;
+      if (typeof document !== "undefined") document.getElementById(MENU_CARD_ID)?.remove();
       return;
     }
 
@@ -463,58 +452,14 @@
     positionMenuCard(card);
     card.innerHTML = "";
 
-    if (state.view === "apikey") {
-      renderApiKeyView(card);
-    } else {
-      renderMainView(card);
-    }
-  }
-
-  function createActionBtn(label, className, onClick) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = className;
-    btn.textContent = label;
-    btn.addEventListener("click", onClick);
-    return btn;
-  }
-
-  function createSegmentedControl(options, activeValue, onSelect, ariaLabel) {
-    const group = document.createElement("div");
-    group.className = "wphoto-segmented";
-    group.setAttribute("role", "group");
-    group.setAttribute("aria-label", ariaLabel);
-
-    for (const opt of options) {
-      const btn = createActionBtn(opt.label, "wphoto-seg-btn", () => onSelect(opt.value));
-      btn.setAttribute("aria-pressed", String(opt.value === activeValue));
-      group.appendChild(btn);
-    }
-    return group;
-  }
-
-  function createLabeledSegmentedField(attrName, labelText, options, activeVal, onSelect) {
-    const field = document.createElement("div");
-    field.className = "wphoto-field";
-    field.setAttribute(attrName, "true");
-    const label = document.createElement("span");
-    label.className = "wphoto-label";
-    label.textContent = labelText;
-    field.appendChild(label);
-    field.appendChild(createSegmentedControl(options, activeVal, onSelect, labelText));
-    return field;
+    if (state.view === "apikey") renderApiKeyView(card);
+    else renderMainView(card);
   }
 
   function renderApiKeyView(card) {
     const t = getUiStrings(state.lang);
-    const header = document.createElement("div");
-    header.className = "wphoto-header";
-
-    const title = document.createElement("span");
-    title.className = "wphoto-title";
-    title.textContent = t.apiKeyTitle;
-
-    header.appendChild(title);
+    const header = el("div", "wphoto-header");
+    header.appendChild(el("span", "wphoto-title", t.apiKeyTitle));
     header.appendChild(
       createActionBtn(t.backBtn, "wphoto-text-btn", () => {
         state.view = "main";
@@ -523,60 +468,47 @@
     );
     card.appendChild(header);
 
-    const helper = document.createElement("div");
-    helper.className = "wphoto-note";
+    const helper = el("div", "wphoto-note");
     helper.innerHTML = t.apiKeyHelperHtml;
     card.appendChild(helper);
 
     if (state.apiKey) {
-      const statusRow = document.createElement("div");
-      statusRow.className = "wphoto-field";
+      const statusRow = el("div", "wphoto-field", t.currentKey(maskApiKey(state.apiKey)));
       statusRow.style.fontSize = "12px";
-      statusRow.textContent = t.currentKey(maskApiKey(state.apiKey));
       card.appendChild(statusRow);
     }
 
-    const inputRow = document.createElement("div");
-    inputRow.className = "wphoto-input-row";
-
-    const input = document.createElement("input");
+    const inputRow = el("div", "wphoto-input-row");
+    const input = el("input", "wphoto-input");
     input.type = state.showApiKeyPlain ? "text" : "password";
-    input.className = "wphoto-input";
     input.placeholder = "AIzaSy...";
     input.value = state.apiKey;
     input.setAttribute("aria-label", t.apiKeyInputAria);
 
-    inputRow.appendChild(input);
-    inputRow.appendChild(
-      createActionBtn(
-        state.showApiKeyPlain ? t.hideBtn : t.showBtn,
-        "wphoto-text-btn",
-        () => {
-          state.showApiKeyPlain = !state.showApiKeyPlain;
-          state.apiKey = input.value;
-          renderMenu();
-        }
-      )
+    const toggleBtn = createActionBtn(
+      state.showApiKeyPlain ? t.hideBtn : t.showBtn,
+      "wphoto-text-btn",
+      () => {
+        state.showApiKeyPlain = !state.showApiKeyPlain;
+        input.type = state.showApiKeyPlain ? "text" : "password";
+        toggleBtn.textContent = state.showApiKeyPlain ? t.hideBtn : t.showBtn;
+      }
     );
+    inputRow.appendChild(input);
+    inputRow.appendChild(toggleBtn);
     card.appendChild(inputRow);
 
     if (state.apiKeyStatusKey && t[state.apiKeyStatusKey]) {
-      const msg = document.createElement("div");
+      const msg = el("div", "", t[state.apiKeyStatusKey]);
       msg.style.fontSize = "12px";
       msg.style.marginBottom = "8px";
       msg.style.color = "var(--wphoto-primary)";
-      msg.textContent = t[state.apiKeyStatusKey];
       card.appendChild(msg);
     }
 
-    const actions = document.createElement("div");
-    actions.className = "wphoto-actions-row";
-
-    const saveBtn = createActionBtn(t.saveKeyBtn, "wphoto-primary-btn", () =>
-      saveGeminiApiKey(input.value)
-    );
+    const actions = el("div", "wphoto-actions-row");
+    const saveBtn = createActionBtn(t.saveKeyBtn, "wphoto-primary-btn", () => saveGeminiApiKey(input.value));
     saveBtn.style.flex = "1";
-
     actions.appendChild(saveBtn);
     actions.appendChild(
       createActionBtn(t.clearBtn, "wphoto-text-btn", () => {
@@ -589,16 +521,8 @@
 
   function renderMainView(card) {
     const t = getUiStrings(state.lang);
-
-    // Header: Title + API Key button
-    const header = document.createElement("div");
-    header.className = "wphoto-header";
-
-    const title = document.createElement("span");
-    title.className = "wphoto-title";
-    title.textContent = "AI Plus";
-
-    header.appendChild(title);
+    const header = el("div", "wphoto-header");
+    header.appendChild(el("span", "wphoto-title", "AI Plus"));
     header.appendChild(
       createActionBtn(state.apiKey ? t.apiKeySetBtn : t.apiKeyBtn, "wphoto-text-btn", () => {
         state.view = "apikey";
@@ -607,29 +531,18 @@
     );
     card.appendChild(header);
 
-    // 1. Language selector (dynamically built from window.WPHOTO_PROMPTS)
-    const promptsMap = window.WPHOTO_PROMPTS || { en: { label: "English" } };
-    const langOptions = Object.entries(promptsMap).map(([code, cfg]) => ({
-      value: code,
-      label: cfg.label || code.toUpperCase()
-    }));
-
+    const langOptions = Object.entries(window.WPHOTO_PROMPTS || { en: { label: "English" } }).map(
+      ([code, cfg]) => ({ value: code, label: cfg.label || code.toUpperCase() })
+    );
     card.appendChild(
-      createLabeledSegmentedField(
-        "data-wphoto-lang-toggle",
-        t.languageLabel,
-        langOptions,
-        state.lang,
-        (val) => {
-          state.lang = val;
-          saveStoredPrefs();
-          renderMenu();
-          renderStatusBar();
-        }
-      )
+      createLabeledSegmentedField("data-wphoto-lang-toggle", t.languageLabel, langOptions, state.lang, (val) => {
+        state.lang = val;
+        saveStoredPrefs();
+        renderMenu();
+        renderStatusBar();
+      })
     );
 
-    // 2. Model selector (Cloud vs Local)
     card.appendChild(
       createLabeledSegmentedField(
         "data-wphoto-model-toggle",
@@ -649,15 +562,11 @@
     );
 
     if (state.model === "local") {
-      const localNote = document.createElement("div");
-      localNote.className = "wphoto-note";
-      if (state.nanoStatus === "available") {
-        localNote.textContent = t.localReady;
-      } else if (state.nanoStatus === "downloadable") {
+      const localNote = el("div", "wphoto-note");
+      if (state.nanoStatus === "available") localNote.textContent = t.localReady;
+      else if (state.nanoStatus === "downloadable") {
         localNote.textContent = t.localDownloadNeeded;
-        localNote.appendChild(
-          createActionBtn(t.downloadModelBtn, "wphoto-link-btn", handleDownloadLocalModel)
-        );
+        localNote.appendChild(createActionBtn(t.downloadModelBtn, "wphoto-link-btn", handleDownloadLocalModel));
       } else if (state.nanoStatus === "downloading") {
         localNote.textContent = t.localDownloading(state.nanoProgressPct);
       } else {
@@ -665,9 +574,7 @@
       }
       card.appendChild(localNote);
     } else if (!state.apiKey) {
-      const keyWarning = document.createElement("div");
-      keyWarning.className = "wphoto-note";
-      keyWarning.textContent = t.cloudNeedsKey;
+      const keyWarning = el("div", "wphoto-note", t.cloudNeedsKey);
       keyWarning.appendChild(
         createActionBtn(t.setApiKeyBtn, "wphoto-link-btn", () => {
           state.view = "apikey";
@@ -677,7 +584,6 @@
       card.appendChild(keyWarning);
     }
 
-    // 3. Overwrite existing descriptions (No | Yes)
     card.appendChild(
       createLabeledSegmentedField(
         "data-wphoto-overwrite-toggle",
@@ -695,13 +601,9 @@
       )
     );
 
-    // 4. Verbose log checkbox + Download log button
-    const verboseRow = document.createElement("div");
-    verboseRow.className = "wphoto-row-between";
+    const verboseRow = el("div", "wphoto-row-between");
     verboseRow.setAttribute("data-wphoto-verbose-toggle", "true");
-
-    const checkLabel = document.createElement("label");
-    checkLabel.className = "wphoto-checkbox-label";
+    const checkLabel = el("label", "wphoto-checkbox-label");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = state.verbose;
@@ -715,27 +617,17 @@
       } catch (err) {}
       renderMenu();
     });
-    const checkSpan = document.createElement("span");
-    checkSpan.textContent = t.verboseLog;
     checkLabel.appendChild(checkbox);
-    checkLabel.appendChild(checkSpan);
+    checkLabel.appendChild(el("span", "", t.verboseLog));
     verboseRow.appendChild(checkLabel);
-
     if (state.verbose) {
-      verboseRow.appendChild(
-        createActionBtn(t.downloadLog, "wphoto-link-btn", handleDownloadLog)
-      );
+      verboseRow.appendChild(createActionBtn(t.downloadLog, "wphoto-link-btn", handleDownloadLog));
     }
     card.appendChild(verboseRow);
 
-    // 5. Primary CTA Button
     const summary = window.WPhotoSelection.getSummary();
     const canStart = summary.eligible > 0 || summary.inAlbum;
-    const primaryBtn = createActionBtn(
-      getCtaLabel(state.lang, summary),
-      "wphoto-primary-btn",
-      handleStartBatch
-    );
+    const primaryBtn = createActionBtn(getCtaLabel(state.lang, summary), "wphoto-primary-btn", handleStartBatch);
     primaryBtn.setAttribute("data-wphoto-primary-cta", "true");
     primaryBtn.disabled = !canStart || state.enumeratingAlbum;
     card.appendChild(primaryBtn);
@@ -750,10 +642,9 @@
     const batch = state.activeBatch;
     let bar = document.getElementById(STATUS_BAR_ID);
     if (!batch) {
-      if (bar) bar.remove();
+      bar?.remove();
       return;
     }
-
     if (!bar) {
       bar = document.createElement("div");
       bar.id = STATUS_BAR_ID;
@@ -762,9 +653,7 @@
     applyThemeAttr(bar);
     bar.innerHTML = "";
 
-    const activeLang = state.lang || batch.options?.lang || "en";
-    const t = getUiStrings(activeLang);
-
+    const t = getUiStrings(state.lang || batch.options?.lang || "en");
     const total = batch.photoIds?.length || 0;
     const done = batch.completedIds?.length || 0;
     const skipped = batch.skippedIds?.length || 0;
@@ -774,46 +663,25 @@
     const isPaused = batch.lastReason === "paused";
     const isCancelled = batch.lastReason === "cancelled";
 
-    const textSpan = document.createElement("span");
-    if (isRunning) {
-      textSpan.textContent = t.statusRunning(Math.min(processed + 1, total), total, done, skipped);
-    } else if (isPaused) {
-      textSpan.textContent = t.statusPaused(processed, total, done, skipped);
-    } else if (isCancelled) {
-      textSpan.textContent = t.statusCancelled(done, skipped);
-    } else {
-      textSpan.textContent = t.statusFinished(done, skipped, failed);
-    }
-    bar.appendChild(textSpan);
+    const msg = isRunning
+      ? t.statusRunning(Math.min(processed + 1, total), total, done, skipped)
+      : isPaused
+      ? t.statusPaused(processed, total, done, skipped)
+      : isCancelled
+      ? t.statusCancelled(done, skipped)
+      : t.statusFinished(done, skipped, failed);
+    bar.appendChild(el("span", "", msg));
 
     if (isRunning) {
-      bar.appendChild(
-        createActionBtn(t.pauseBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.pauseBatch())
-      );
-      bar.appendChild(
-        createActionBtn(t.cancelBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.cancelBatch())
-      );
+      bar.appendChild(createActionBtn(t.pauseBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.pauseBatch()));
+      bar.appendChild(createActionBtn(t.cancelBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.cancelBatch()));
     } else if (isPaused) {
-      bar.appendChild(
-        createActionBtn(t.resumeBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.resumeBatch())
-      );
-      bar.appendChild(
-        createActionBtn(t.cancelBtn, "wphoto-text-btn", () =>
-          window.WPhotoBatchRunner.clearActiveBatch()
-        )
-      );
+      bar.appendChild(createActionBtn(t.resumeBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.resumeBatch()));
+      bar.appendChild(createActionBtn(t.cancelBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.clearActiveBatch()));
     } else {
-      if (state.menuOpen) {
-        closeMenu();
-      }
-      bar.appendChild(
-        createActionBtn(t.dismissBtn, "wphoto-text-btn", () =>
-          window.WPhotoBatchRunner.clearActiveBatch()
-        )
-      );
-
+      if (state.menuOpen) closeMenu();
+      bar.appendChild(createActionBtn(t.dismissBtn, "wphoto-text-btn", () => window.WPhotoBatchRunner.clearActiveBatch()));
       const ageMs = typeof batch.completedAt === "number" ? Math.max(0, Date.now() - batch.completedAt) : 0;
-      const delayMs = Math.max(500, STATUS_BAR_AUTO_DISMISS_MS - ageMs);
       statusAutoDismissTimer = setTimeout(() => {
         statusAutoDismissTimer = null;
         if (state.activeBatch && state.activeBatch.completedAt !== null && state.activeBatch.lastReason !== "paused") {
@@ -821,20 +689,16 @@
           window.WPhotoBatchRunner.clearActiveBatch();
           renderStatusBar();
         }
-      }, delayMs);
+      }, Math.max(500, STATUS_BAR_AUTO_DISMISS_MS - ageMs));
     }
   }
 
-  function isElementVisible(el) {
-    if (!el) return false;
-    if (typeof el.checkVisibility === "function") {
-      return el.checkVisibility({
-        visibilityProperty: true,
-        opacityProperty: true,
-        contentVisibilityAuto: true
-      });
+  function isElementVisible(node) {
+    if (!node) return false;
+    if (typeof node.checkVisibility === "function") {
+      return node.checkVisibility({ visibilityProperty: true, opacityProperty: true, contentVisibilityAuto: true });
     }
-    return el.offsetParent !== null;
+    return node.offsetParent !== null;
   }
 
   function findSelectionActionContainer() {
@@ -856,18 +720,14 @@
 
     if (shareBtn && isElementVisible(shareBtn)) {
       const clearAncestors = new Set();
-      for (let p = clearBtn; p; p = p.parentElement) {
-        clearAncestors.add(p);
-      }
+      for (let p = clearBtn; p; p = p.parentElement) clearAncestors.add(p);
       let commonAncestor = shareBtn;
       while (commonAncestor && !clearAncestors.has(commonAncestor)) {
         commonAncestor = commonAncestor.parentElement;
       }
-      if (commonAncestor && commonAncestor.children) {
+      if (commonAncestor?.children) {
         for (const child of Array.from(commonAncestor.children)) {
-          if (child.contains && child.contains(shareBtn)) {
-            return child;
-          }
+          if (child.contains?.(shareBtn)) return child;
         }
         return commonAncestor;
       }
@@ -879,82 +739,64 @@
   function getTopSearchContainers() {
     const containers = [];
     if (typeof document === "undefined") return containers;
-    const inputs = Array.from(
-      document.querySelectorAll('input[type="text"], input:not([type]), textarea')
-    ).filter((el) => {
-      const r = el.getBoundingClientRect?.();
-      return r && r.top < 60 && r.width > 0;
-    });
-    for (const input of inputs) {
-      const w = input.getBoundingClientRect().width;
+    for (const input of Array.from(document.querySelectorAll('input[type="text"], input:not([type]), textarea'))) {
+      const r = input.getBoundingClientRect?.();
+      if (!r || r.top >= 60 || r.width <= 0) continue;
       let cur = input;
-      for (
-        let i = 0;
-        cur && i < 6 && !(i > 0 && cur.getBoundingClientRect?.().width > 1.5 * w);
-        i++, cur = cur.parentElement
-      ) {
+      for (let i = 0; cur && i < 6 && !(i > 0 && cur.getBoundingClientRect?.().width > 1.5 * r.width); i++, cur = cur.parentElement) {
         containers.push(cur);
       }
     }
     return containers;
   }
 
-  function isExcludedTopBarNode(el, searchContainers) {
-    if (!el) return true;
-    if (el.closest?.('#gb, [class*="gb_"], [role="search"], form')) return true;
-    return searchContainers.some((c) => c.contains?.(el));
+  function isExcludedTopBarNode(node, searchContainers) {
+    return !node || Boolean(node.closest?.('#gb, [class*="gb_"], [role="search"], form')) || searchContainers.some((c) => c.contains?.(node));
   }
+
+  const isRtlDoc = () =>
+    typeof getComputedStyle === "function" &&
+    document.documentElement &&
+    getComputedStyle(document.documentElement).direction === "rtl";
 
   function findHomeHeaderAnchor() {
     if (typeof document === "undefined") return null;
-    const isRtl =
-      typeof getComputedStyle === "function" &&
-      document.documentElement &&
-      getComputedStyle(document.documentElement).direction === "rtl";
+    const isRtl = isRtlDoc();
     const searchContainers = getTopSearchContainers();
-    const xCoord = (el) => {
-      const left = el.getBoundingClientRect().left;
-      return isRtl ? -left : left;
-    };
     const candidates = Array.from(
       document.querySelectorAll('a[aria-label], button[aria-label], [role="button"][aria-label]')
     )
-      .filter((el) => {
-        if (
-          el.id === TRIGGER_BTN_ID ||
-          !isElementVisible(el) ||
-          isExcludedTopBarNode(el, searchContainers)
-        ) {
-          return false;
+      .reduce((acc, node) => {
+        if (node.id === TRIGGER_BTN_ID || !isElementVisible(node) || isExcludedTopBarNode(node, searchContainers)) {
+          return acc;
         }
-        const r = el.getBoundingClientRect?.();
-        return r && r.top < 60 && r.width >= 24 && r.width <= 60 && r.height >= 24 && r.height <= 60;
-      })
-      .sort((a, b) => xCoord(a) - xCoord(b));
+        const r = node.getBoundingClientRect?.();
+        if (r && r.top < 60 && r.width >= 24 && r.width <= 60 && r.height >= 24 && r.height <= 60) {
+          acc.push({ el: node, r, x: isRtl ? -r.left : r.left });
+        }
+        return acc;
+      }, [])
+      .sort((a, b) => a.x - b.x);
 
     if (candidates.length === 0) return null;
     let anchor = candidates[candidates.length - 1];
     for (let i = candidates.length - 1; i > 0; i--) {
-      if (xCoord(candidates[i]) - xCoord(candidates[i - 1]) > 120) break;
+      if (candidates[i].x - candidates[i - 1].x > 120) break;
       anchor = candidates[i - 1];
     }
     const halfW = (typeof window !== "undefined" ? window.innerWidth : 1280) / 2;
-    const anchorLeft = anchor.getBoundingClientRect().left;
-    const onActionSide = isRtl ? anchorLeft < halfW : anchorLeft > halfW;
-    return onActionSide ? anchor : null;
+    return (isRtl ? anchor.r.left < halfW : anchor.r.left > halfW) ? anchor.el : null;
   }
 
   function findHomeFlexHeaderBar() {
     if (typeof document === "undefined") return null;
     const searchContainers = getTopSearchContainers();
-    const firstTopItem = Array.from(
-      document.querySelectorAll("a[aria-label], button[aria-label]")
-    ).find(
-      (el) =>
-        el.id !== TRIGGER_BTN_ID &&
-        isElementVisible(el) &&
-        !isExcludedTopBarNode(el, searchContainers) &&
-        el.getBoundingClientRect?.().top < 60
+    const firstTopItem = Array.from(document.querySelectorAll("a[aria-label], button[aria-label]")).find(
+      (node) =>
+        node.id !== TRIGGER_BTN_ID &&
+        isElementVisible(node) &&
+        !isExcludedTopBarNode(node, searchContainers) &&
+        node.getBoundingClientRect?.().top < 60
     );
     if (!firstTopItem) return null;
     let cur = firstTopItem.parentElement;
@@ -962,19 +804,8 @@
     for (let i = 0; i < 8 && cur; i++, cur = cur.parentElement) {
       const r = cur.getBoundingClientRect?.();
       const style = typeof getComputedStyle === "function" ? getComputedStyle(cur) : null;
-      if (
-        style &&
-        style.display === "flex" &&
-        r &&
-        r.top < 20 &&
-        r.height > 0 &&
-        r.height < 100 &&
-        r.width >= 0.9 * winW
-      ) {
-        if (
-          searchContainers.includes(cur) ||
-          (cur.querySelector?.('input[type="text"], [role="search"]') && cur.children.length <= 1)
-        ) {
+      if (style?.display === "flex" && r && r.top < 20 && r.height > 0 && r.height < 100 && r.width >= 0.9 * winW) {
+        if (searchContainers.includes(cur) || (cur.querySelector?.('input[type="text"], [role="search"]') && cur.children.length <= 1)) {
           continue;
         }
         return cur;
@@ -989,7 +820,7 @@
     parent.insertBefore(btn, anchor);
     for (let i = 0; i < 8; i++) {
       const curParent = btn.parentElement;
-      if (!curParent || !curParent.parentElement) return;
+      if (!curParent?.parentElement) return;
       const rect = curParent.getBoundingClientRect?.();
       if (!rect || rect.width > 60) return;
       curParent.parentElement.insertBefore(btn, curParent);
@@ -1002,63 +833,43 @@
     if (!bRect || !aRect || bRect.height === 0 || aRect.height === 0) return;
     const delta = Math.round(aRect.top + aRect.height / 2 - (bRect.top + bRect.height / 2));
     if (Math.abs(delta) < 2 || Math.abs(delta) > 12) return;
-    const curTop = parseFloat(btn.style.top) || 0;
     btn.style.position = "relative";
-    btn.style.top = `${curTop + delta}px`;
+    btn.style.top = `${(parseFloat(btn.style.top) || 0) + delta}px`;
   }
 
   function isAdjacentToAnchor(btn, anchor) {
-    const parent = btn.parentElement;
-    if (!parent || !parent.contains?.(anchor)) return false;
     const next = btn.nextElementSibling;
-    return next !== null && (next === anchor || next.contains?.(anchor));
+    return Boolean(btn.parentElement?.contains?.(anchor) && next && (next === anchor || next.contains?.(anchor)));
   }
 
   function isMountedInValidTopBarPosition(btn) {
     const r = btn.getBoundingClientRect?.();
     if (!r || (r.width === 0 && r.height === 0)) return false;
-    const isRtl =
-      typeof getComputedStyle === "function" &&
-      document.documentElement &&
-      getComputedStyle(document.documentElement).direction === "rtl";
     const halfW = (typeof window !== "undefined" ? window.innerWidth : 1280) / 2;
-    return isRtl ? r.left < halfW : r.left > halfW;
+    return isRtlDoc() ? r.left < halfW : r.left > halfW;
   }
 
   function ensureTriggerButtonMounted() {
     if (typeof document === "undefined" || !document.body) return;
-
-    // Hide the menu & trigger button when visualizing one photo or on the Google Photos home page (no album / no selection)
     if (shouldHideTriggerAndMenu()) {
-      if (state.menuOpen) {
-        closeMenu();
-      }
-      const existingBtn = document.getElementById(TRIGGER_BTN_ID);
-      if (existingBtn) {
-        existingBtn.remove();
-      }
+      if (state.menuOpen) closeMenu();
+      document.getElementById(TRIGGER_BTN_ID)?.remove();
       return;
     }
 
     let btn = document.getElementById(TRIGGER_BTN_ID);
     if (!btn) {
-      btn = document.createElement("button");
-      btn.id = TRIGGER_BTN_ID;
-      btn.type = "button";
-      btn.dir = "ltr";
-      btn.textContent = "AI Plus";
-      btn.setAttribute("aria-label", "AI Plus");
-      btn.setAttribute("aria-haspopup", "dialog");
-      btn.setAttribute("aria-expanded", String(state.menuOpen));
-      btn.addEventListener("click", (e) => {
+      btn = createActionBtn("AI Plus", "", (e) => {
         e.stopPropagation();
         state.menuOpen = !state.menuOpen;
         btn.setAttribute("aria-expanded", String(state.menuOpen));
-        if (state.menuOpen && state.model === "local") {
-          triggerLocalProbe();
-        }
+        if (state.menuOpen && state.model === "local") triggerLocalProbe();
         renderMenu();
       });
+      btn.id = TRIGGER_BTN_ID;
+      btn.dir = "ltr";
+      btn.setAttribute("aria-label", "AI Plus");
+      btn.setAttribute("aria-haspopup", "dialog");
     }
     applyThemeAttr(btn);
     btn.setAttribute("aria-expanded", String(state.menuOpen));
@@ -1068,8 +879,21 @@
       btn.style.top = "";
     };
 
-    // 1. Selection bar placement (leftmost item of the right-side selection action cluster)
     const selContainer = findSelectionActionContainer();
+    if (btn.parentElement && btn.getAttribute("data-pinned") === null) {
+      const placement = btn.getAttribute("data-placement");
+      if (placement === "selection" && selContainer === btn.parentElement && btn.previousElementSibling === null) return;
+      if (
+        placement === "home" &&
+        !selContainer &&
+        btn.nextElementSibling &&
+        isElementVisible(btn.nextElementSibling) &&
+        isMountedInValidTopBarPosition(btn)
+      ) {
+        return;
+      }
+    }
+
     if (selContainer) {
       btn.removeAttribute("data-pinned");
       btn.setAttribute("data-placement", "selection");
@@ -1080,10 +904,9 @@
       return;
     }
 
-    // 2. Home / Album header action cluster placement (before top-right action buttons)
     btn.setAttribute("data-placement", "home");
     const anchor = findHomeHeaderAnchor();
-    if (anchor && anchor.parentElement) {
+    if (anchor?.parentElement) {
       btn.removeAttribute("data-pinned");
       if (!isAdjacentToAnchor(btn, anchor)) {
         resetInlinePos();
@@ -1095,28 +918,19 @@
       }
     }
 
-    // 3. Secondary flex header bar fallback
     const flexBar = findHomeFlexHeaderBar();
     if (flexBar) {
       btn.removeAttribute("data-pinned");
       resetInlinePos();
-      if (btn.parentElement !== flexBar) {
-        flexBar.appendChild(btn);
-      }
-      if (isMountedInValidTopBarPosition(btn)) {
-        return;
-      }
+      if (btn.parentElement !== flexBar) flexBar.appendChild(btn);
+      if (isMountedInValidTopBarPosition(btn)) return;
     }
 
-    // 4. Final fallback: pinned top-right header placement
     btn.setAttribute("data-pinned", "true");
     resetInlinePos();
-    if (btn.parentElement !== document.body) {
-      document.body.appendChild(btn);
-    }
+    if (btn.parentElement !== document.body) document.body.appendChild(btn);
   }
 
-  // Close menu on outside click or Escape
   if (typeof document !== "undefined") {
     document.addEventListener(
       "mousedown",
@@ -1149,33 +963,25 @@
     ensureTriggerButtonMounted();
     renderStatusBar();
 
-    window.WPhotoSelection.onChange(() => {
+    const syncUi = () => {
       ensureTriggerButtonMounted();
       if (state.menuOpen) renderMenu();
-    });
-
+    };
+    window.WPhotoSelection.onChange(syncUi);
     window.WPhotoBatchRunner.onStateChange((batch) => {
       state.activeBatch = batch;
       renderStatusBar();
     });
-
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      window.addEventListener("popstate", () => {
-        ensureTriggerButtonMounted();
-        if (state.menuOpen) renderMenu();
-      });
-    }
-
-    setInterval(ensureTriggerButtonMounted, 400);
+    window.addEventListener?.("popstate", syncUi);
+    setInterval(() => {
+      if (typeof document === "undefined" || document.hidden !== true) ensureTriggerButtonMounted();
+    }, 1000);
     await window.WPhotoBatchRunner.continueBatchIfActive();
   }
 
   if (typeof document !== "undefined") {
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", initUi);
-    } else {
-      initUi();
-    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initUi);
+    else initUi();
   }
 
   window.WPhotoUi = {

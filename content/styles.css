@@ -35,10 +35,8 @@
   --wphoto-tonal-bg: rgba(138, 180, 248, 0.18);
   --wphoto-tonal-text: #8ab4f8;
   --wphoto-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.6), 0 4px 8px 3px rgba(0, 0, 0, 0.4);
-  --wphoto-font: "Google Sans", "Google Sans Text", Roboto, Arial, sans-serif;
 }
 
-/* Toolbar Trigger Button ("AI Plus") matching Google Photos native header/toolbar buttons */
 #wphoto-trigger-btn {
   box-sizing: border-box;
   display: inline-flex;
@@ -90,21 +88,30 @@
   vertical-align: baseline;
 }
 
-/* Single Dropdown Menu Card matching Google Photos native popover menus */
-#wphoto-menu-card {
+#wphoto-menu-card,
+#wphoto-status-bar {
   position: fixed;
-  z-index: 2147483645;
-  width: 310px;
-  box-sizing: border-box;
   background-color: var(--wphoto-bg);
   color: var(--wphoto-text);
   border: 1px solid var(--wphoto-border);
   border-radius: 8px;
   box-shadow: var(--wphoto-shadow);
-  padding: 14px 16px;
   font-family: var(--wphoto-font);
   font-size: 13px;
+}
+
+#wphoto-menu-card {
+  z-index: 2147483645;
+  width: 310px;
+  box-sizing: border-box;
+  padding: 14px 16px;
   line-height: 1.45;
+}
+
+#wphoto-menu-card button,
+#wphoto-menu-card input,
+#wphoto-status-bar button {
+  font-family: inherit;
 }
 
 .wphoto-header {
@@ -120,7 +127,6 @@
   font-size: 14px;
   font-weight: 500;
   color: var(--wphoto-text-strong);
-  font-family: var(--wphoto-font);
 }
 
 .wphoto-text-btn {
@@ -128,7 +134,6 @@
   border-radius: 6px;
   background-color: transparent;
   color: var(--wphoto-text);
-  font-family: var(--wphoto-font);
   font-size: 12px;
   font-weight: 500;
   padding: 4px 10px;
@@ -149,7 +154,6 @@
   font-size: 12px;
   font-weight: 500;
   color: var(--wphoto-text-secondary);
-  font-family: var(--wphoto-font);
   margin-bottom: 6px;
 }
 
@@ -167,7 +171,6 @@
   border-radius: 4px;
   background-color: transparent;
   color: var(--wphoto-text-secondary);
-  font-family: var(--wphoto-font);
   font-size: 12px;
   font-weight: 500;
   padding: 6px 8px;
@@ -198,7 +201,6 @@
   gap: 6px;
   font-size: 12px;
   color: var(--wphoto-text);
-  font-family: var(--wphoto-font);
   cursor: pointer;
 }
 
@@ -207,7 +209,6 @@
   background: none;
   padding: 0;
   color: var(--wphoto-primary);
-  font-family: var(--wphoto-font);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -221,7 +222,6 @@
   border-radius: 6px;
   padding: 8px 10px;
   margin-bottom: 12px;
-  font-family: var(--wphoto-font);
 }
 
 .wphoto-primary-btn {
@@ -231,7 +231,6 @@
   border-radius: 18px;
   background-color: var(--wphoto-primary);
   color: var(--wphoto-on-primary);
-  font-family: var(--wphoto-font);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -262,7 +261,6 @@
   border-radius: 4px;
   background-color: var(--wphoto-bg);
   color: var(--wphoto-text-strong);
-  font-family: var(--wphoto-font);
   font-size: 12px;
   box-sizing: border-box;
 }
@@ -273,21 +271,12 @@
   margin-top: 8px;
 }
 
-/* Floating Batch Status Bar (bottom-right) */
 #wphoto-status-bar {
-  position: fixed;
   right: 20px;
   bottom: 20px;
   z-index: 2147483644;
   display: flex;
   align-items: center;
   gap: 12px;
-  background-color: var(--wphoto-bg);
-  color: var(--wphoto-text);
-  border: 1px solid var(--wphoto-border);
-  border-radius: 8px;
-  box-shadow: var(--wphoto-shadow);
   padding: 10px 14px;
-  font-family: var(--wphoto-font);
-  font-size: 13px;
 }

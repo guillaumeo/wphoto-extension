@@ -3,6 +3,7 @@
 
 let attachedTabId = null;
 let userDetachedTabId = null;
+let attachInFlight = null;
 const inFlightRequests = new Map();
 const ignoredTelemetryIds = new Set();
 const recentSaveTimestamps = [];
@@ -11,25 +12,32 @@ let pendingQuiescenceWait = null;
 
 const VISIBILITY_OVERRIDE_SCRIPT = `
   try {
-    Object.defineProperty(document, 'visibilityState', {
-      configurable: true,
-      get: function() { return 'visible'; }
-    });
-    Object.defineProperty(document, 'hidden', {
-      configurable: true,
-      get: function() { return false; }
-    });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
   } catch (e) {}
 `;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function sendDebuggerCommand(tabId, method, params = {}) {
   return new Promise((resolve, reject) => {
     chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
-      if (chrome.runtime.lastError) {
-        return reject(new Error(chrome.runtime.lastError.message));
-      }
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
       resolve(result);
     });
+  });
+}
+
+function detachTab(tabId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.debugger.detach({ tabId }, () => {
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    } catch (e) {
+      resolve();
+    }
   });
 }
 
@@ -54,15 +62,15 @@ function resetNetworkState() {
   resolveQuiescenceWait("ceiling");
 }
 
-function recordNetworkActivity() {
-  lastNetworkActivityAt = Date.now();
-}
-
 function checkQuiescenceIdle() {
   if (!pendingQuiescenceWait) return;
   if (pendingQuiescenceWait.idleTimer) {
     clearTimeout(pendingQuiescenceWait.idleTimer);
     pendingQuiescenceWait.idleTimer = null;
+  }
+  const staleCutoff = Date.now() - 15000;
+  for (const [reqId, req] of inFlightRequests) {
+    if (req.startedAt < staleCutoff) inFlightRequests.delete(reqId);
   }
   if (inFlightRequests.size > 0) return;
 
@@ -72,7 +80,6 @@ function checkQuiescenceIdle() {
     resolveQuiescenceWait("idle");
     return;
   }
-
   pendingQuiescenceWait.idleTimer = setTimeout(checkQuiescenceIdle, remaining);
 }
 
@@ -86,14 +93,16 @@ try {
     }
 
     if (method.startsWith("Network.") && params) {
+      const reqId = params.requestId;
+      if (!reqId) return;
+
       if (method === "Network.requestWillBeSent") {
         const url = params.request?.url ?? "";
         const isGoogleUpload = /\/upload/i.test(url) && url.includes("google");
         if (!url.includes("batchexecute") && !isGoogleUpload) return;
 
-        const reqId = params.requestId;
-        if (!reqId) return;
         if (url.includes("rpcids=rJ0tlb")) {
+          if (ignoredTelemetryIds.size > 200) ignoredTelemetryIds.clear();
           ignoredTelemetryIds.add(reqId);
           return;
         }
@@ -106,21 +115,12 @@ try {
           recentSaveTimestamps.shift();
         }
 
-        recordNetworkActivity();
-        if (pendingQuiescenceWait) {
-          pendingQuiescenceWait.saveXhrsObserved++;
-        }
+        lastNetworkActivityAt = now;
+        if (pendingQuiescenceWait) pendingQuiescenceWait.saveXhrsObserved++;
         checkQuiescenceIdle();
       } else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") {
-        const reqId = params.requestId;
-        if (!reqId) return;
-        if (ignoredTelemetryIds.has(reqId)) {
-          ignoredTelemetryIds.delete(reqId);
-          return;
-        }
-        if (!inFlightRequests.has(reqId)) return;
-        inFlightRequests.delete(reqId);
-        recordNetworkActivity();
+        if (ignoredTelemetryIds.delete(reqId) || !inFlightRequests.delete(reqId)) return;
+        lastNetworkActivityAt = Date.now();
         checkQuiescenceIdle();
       }
     }
@@ -136,9 +136,9 @@ try {
         if (chrome.storage?.local) {
           chrome.storage.local.get("activeBatch", (data) => {
             const batch = data?.activeBatch;
-            if (batch && (batch.completedAt === null || batch.lastReason === null)) {
+            if (batch && batch.completedAt === null && batch.lastReason === null) {
               batch.lastReason = "cancelled";
-              batch.completedAt = batch.completedAt || Date.now();
+              batch.completedAt = Date.now();
               chrome.storage.local.set({ activeBatch: batch });
             }
           });
@@ -165,92 +165,51 @@ async function configureAttachedSession(tabId) {
     });
   } catch (e) {}
   try {
-    await sendDebuggerCommand(tabId, "Runtime.evaluate", {
-      expression: VISIBILITY_OVERRIDE_SCRIPT
-    });
+    await sendDebuggerCommand(tabId, "Runtime.evaluate", { expression: VISIBILITY_OVERRIDE_SCRIPT });
   } catch (e) {}
   try {
     await sendDebuggerCommand(tabId, "Network.enable", {});
   } catch (e) {}
 }
 
-async function dispatchTrustedClick(tabId, x, y) {
-  await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseMoved",
-    x: 1,
-    y: 1,
-    button: "none",
-    buttons: 0,
-    modifiers: 0,
-    pointerType: "mouse"
-  });
-  await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseMoved",
+function dispatchMouse(tabId, type, x, y, extra = {}) {
+  return sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
+    type,
     x,
     y,
     button: "none",
     buttons: 0,
     modifiers: 0,
-    pointerType: "mouse"
-  });
-  await new Promise((r) => setTimeout(r, 40));
-  await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x,
-    y,
-    button: "left",
-    buttons: 1,
-    clickCount: 1,
-    modifiers: 0,
-    pointerType: "mouse"
-  });
-  await new Promise((r) => setTimeout(r, 40));
-  await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x,
-    y,
-    button: "left",
-    buttons: 0,
-    clickCount: 1,
-    modifiers: 0,
-    pointerType: "mouse"
+    pointerType: "mouse",
+    ...extra
   });
 }
 
+async function dispatchTrustedClick(tabId, x, y) {
+  await dispatchMouse(tabId, "mouseMoved", 1, 1);
+  await dispatchMouse(tabId, "mouseMoved", x, y);
+  await sleep(40);
+  await dispatchMouse(tabId, "mousePressed", x, y, { button: "left", buttons: 1, clickCount: 1 });
+  await sleep(40);
+  await dispatchMouse(tabId, "mouseReleased", x, y, { button: "left", buttons: 0, clickCount: 1 });
+}
+
 async function dispatchTrustedKey(tabId, { key, code, windowsVirtualKeyCode, commands, modifiers = 0, repeat = 1 }) {
-  await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseMoved",
-    x: 1,
-    y: 1,
-    button: "none",
-    buttons: 0,
-    modifiers: 0,
-    pointerType: "mouse"
-  });
+  await dispatchMouse(tabId, "mouseMoved", 1, 1);
   const baseEvent = {
     key,
     code,
     windowsVirtualKeyCode,
     nativeVirtualKeyCode: windowsVirtualKeyCode,
-    modifiers
+    modifiers,
+    ...(Array.isArray(commands) && commands.length > 0 ? { commands } : {})
   };
-  if (Array.isArray(commands) && commands.length > 0) {
-    baseEvent.commands = commands;
-  }
   const count = Math.max(1, Math.trunc(repeat));
   for (let i = 0; i < count; i++) {
-    await sendDebuggerCommand(tabId, "Input.dispatchKeyEvent", {
-      type: "rawKeyDown",
-      ...baseEvent
-    });
-    await new Promise((r) => setTimeout(r, 25));
-    await sendDebuggerCommand(tabId, "Input.dispatchKeyEvent", {
-      type: "keyUp",
-      ...baseEvent
-    });
-    if (i < count - 1) {
-      await new Promise((r) => setTimeout(r, 8));
-    }
+    await sendDebuggerCommand(tabId, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...baseEvent });
+    await sleep(25);
+    await sendDebuggerCommand(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...baseEvent });
+    if (i < count - 1) await sleep(8);
   }
 }
 
@@ -260,17 +219,18 @@ function nanoBridgeMain(config) {
 
   const LM = globalThis.LanguageModel;
   const expected = { expectedInputs: [{ type: "image" }] };
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
   const reply = (id, payload) => {
     window.postMessage({ ns: "wphotoNanoReply", id, ...payload }, window.location.origin);
   };
 
   const computeMeanBrightness = (source) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext("2d");
     if (!ctx) return -1;
+    ctx.clearRect(0, 0, 64, 64);
     ctx.drawImage(source, 0, 0, 64, 64);
     const data = ctx.getImageData(0, 0, 64, 64).data;
     let sum = 0;
@@ -283,12 +243,14 @@ function nanoBridgeMain(config) {
   const loadBitmap = async (imgSrc) => {
     try {
       const resp = await fetch(imgSrc, { credentials: "include" });
-      const bmp = await createImageBitmap(await resp.blob());
-      const brightness = computeMeanBrightness(bmp);
-      if (brightness > (config?.minMeanBrightness ?? 2)) {
-        return { bitmap: bmp, brightness, path: "fetch" };
+      if (resp.ok) {
+        const bmp = await createImageBitmap(await resp.blob());
+        const brightness = computeMeanBrightness(bmp);
+        if (brightness > (config?.minMeanBrightness ?? 2)) {
+          return { bitmap: bmp, brightness, path: "fetch" };
+        }
+        bmp.close();
       }
-      bmp.close();
     } catch (e) {}
 
     const imgEl = Array.from(document.querySelectorAll("img")).find(
@@ -318,8 +280,7 @@ function nanoBridgeMain(config) {
     if (data.op === "probe") {
       if (!LM) return reply(data.id, { status: "no_api" });
       try {
-        const status = await LM.availability(expected);
-        reply(data.id, { status });
+        reply(data.id, { status: await LM.availability(expected) });
       } catch (e) {
         reply(data.id, { status: "unavailable", error: String(e?.message ?? e) });
       }
@@ -350,6 +311,7 @@ function nanoBridgeMain(config) {
       if ("error" in loaded) return reply(data.id, { error: loaded.error });
 
       let session = null;
+      let timeoutId = null;
       try {
         session = await LM.create(expected);
         const promptText = `${data.rules ?? ""} ${data.instruction}`.trim();
@@ -363,20 +325,20 @@ function nanoBridgeMain(config) {
               ]
             }
           ]),
-          new Promise((_, rej) =>
-            setTimeout(() => rej(new Error("generate_timeout")), config?.generateTimeoutMs ?? 35000)
-          )
+          new Promise((_, rej) => {
+            timeoutId = setTimeout(
+              () => rej(new Error("generate_timeout")),
+              config?.generateTimeoutMs ?? 35000
+            );
+          })
         ]);
         reply(data.id, { text, ms: Math.round(performance.now() - t0) });
       } catch (e) {
         reply(data.id, { error: "generate_failed: " + String(e?.message ?? e) });
       } finally {
-        try {
-          session?.destroy();
-        } catch (e) {}
-        try {
-          loaded.bitmap.close();
-        } catch (e) {}
+        clearTimeout(timeoutId);
+        try { session?.destroy(); } catch (e) {}
+        try { loaded.bitmap.close(); } catch (e) {}
       }
     }
   });
@@ -391,6 +353,60 @@ function normalizeDispatchError(tabId, err, fallback) {
   return msg;
 }
 
+async function handleAttach(tabId, message) {
+  while (attachInFlight) {
+    try { await attachInFlight; } catch (e) {}
+  }
+  let releaseAttach;
+  attachInFlight = new Promise((r) => { releaseAttach = r; });
+  try {
+    if (message.explicitStart) {
+      userDetachedTabId = null;
+    } else if (userDetachedTabId === tabId) {
+      return { ok: false, error: "detached_by_user" };
+    }
+    if (message.forPhotoStep && chrome.storage?.local) {
+      try {
+        const stored = await chrome.storage.local.get("activeBatch");
+        const active = stored?.activeBatch;
+        if (!active || active.completedAt !== null || active.lastReason !== null) {
+          return { ok: false, error: "batch_not_active" };
+        }
+      } catch (e) {}
+    }
+    if (attachedTabId === tabId) {
+      try {
+        await sendDebuggerCommand(tabId, "Runtime.evaluate", { expression: VISIBILITY_OVERRIDE_SCRIPT });
+        return { ok: true, attached: true, tabId };
+      } catch (e) {
+        attachedTabId = null;
+        resetNetworkState();
+      }
+    }
+    if (attachedTabId !== null && attachedTabId !== tabId) {
+      await detachTab(attachedTabId);
+      attachedTabId = null;
+      resetNetworkState();
+    }
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.debugger.attach({ tabId }, "1.3", () => {
+          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+          resolve();
+        });
+      });
+      attachedTabId = tabId;
+      await configureAttachedSession(tabId);
+      return { ok: true, attached: true, tabId };
+    } catch (e) {
+      return { ok: false, error: e.message || "attach_failed" };
+    }
+  } finally {
+    attachInFlight = null;
+    releaseAttach();
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const type = message?.type ?? "";
   if (!type.startsWith("BATCH_")) return false;
@@ -401,133 +417,56 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  const runAttached = async (fn, fallback) => {
+    if (attachedTabId !== tabId) {
+      sendResponse({ ok: false, error: "not_attached" });
+      return;
+    }
+    try {
+      await fn();
+      sendResponse({ ok: true });
+    } catch (e) {
+      sendResponse({ ok: false, error: normalizeDispatchError(tabId, e, fallback) });
+    }
+  };
+
   (async () => {
     switch (type) {
-      case "BATCH_ATTACH": {
-        if (message.explicitStart) {
-          userDetachedTabId = null;
-        } else if (userDetachedTabId === tabId) {
-          sendResponse({ ok: false, error: "detached_by_user" });
-          return;
-        }
-        if (message.forPhotoStep && chrome.storage?.local) {
-          try {
-            const stored = await chrome.storage.local.get("activeBatch");
-            const active = stored?.activeBatch;
-            if (!active || active.completedAt !== null || active.lastReason !== null) {
-              sendResponse({ ok: false, error: "batch_not_active" });
-              return;
-            }
-          } catch (e) {}
-        }
-        if (attachedTabId === tabId) {
-          try {
-            await configureAttachedSession(tabId);
-            sendResponse({ ok: true, attached: true, tabId });
-            return;
-          } catch (e) {
-            attachedTabId = null;
-            resetNetworkState();
-          }
-        }
-        if (attachedTabId !== null && attachedTabId !== tabId) {
-          try {
-            await new Promise((r) => chrome.debugger.detach({ tabId: attachedTabId }, () => r()));
-          } catch (e) {}
-          attachedTabId = null;
-          resetNetworkState();
-        }
-        try {
-          await new Promise((resolve, reject) => {
-            chrome.debugger.attach({ tabId }, "1.3", () => {
-              if (chrome.runtime.lastError) {
-                return reject(new Error(chrome.runtime.lastError.message));
-              }
-              resolve();
-            });
-          });
-          attachedTabId = tabId;
-          await configureAttachedSession(tabId);
-          sendResponse({ ok: true, attached: true, tabId });
-        } catch (e) {
-          sendResponse({ ok: false, error: e.message || "attach_failed" });
-        }
+      case "BATCH_ATTACH":
+        sendResponse(await handleAttach(tabId, message));
         return;
-      }
 
-      case "BATCH_DETACH": {
+      case "BATCH_DETACH":
         if (attachedTabId === tabId) {
           resetNetworkState();
           attachedTabId = null;
-          try {
-            await new Promise((resolve) => {
-              chrome.debugger.detach({ tabId }, () => {
-                void chrome.runtime.lastError;
-                resolve();
-              });
-            });
-          } catch (e) {}
+          await detachTab(tabId);
         }
         sendResponse({ ok: true });
         return;
-      }
 
-      case "BATCH_GET_STATUS": {
+      case "BATCH_GET_STATUS":
         sendResponse({ ok: true, attached: attachedTabId === tabId, tabId: attachedTabId });
         return;
-      }
 
-      case "BATCH_DISPATCH_CLICK_AT": {
-        if (attachedTabId !== tabId) {
-          sendResponse({ ok: false, error: "not_attached" });
-          return;
-        }
-        try {
-          await dispatchTrustedClick(tabId, message.x, message.y);
-          sendResponse({ ok: true });
-        } catch (e) {
-          sendResponse({ ok: false, error: normalizeDispatchError(tabId, e, "click_failed") });
-        }
-        return;
-      }
+      case "BATCH_DISPATCH_CLICK_AT":
+        return runAttached(() => dispatchTrustedClick(tabId, message.x, message.y), "click_failed");
 
-      case "BATCH_DISPATCH_KEY": {
-        if (attachedTabId !== tabId) {
-          sendResponse({ ok: false, error: "not_attached" });
-          return;
-        }
-        try {
-          await dispatchTrustedKey(tabId, message);
-          sendResponse({ ok: true });
-        } catch (e) {
-          sendResponse({ ok: false, error: normalizeDispatchError(tabId, e, "key_dispatch_failed") });
-        }
-        return;
-      }
+      case "BATCH_DISPATCH_KEY":
+        return runAttached(() => dispatchTrustedKey(tabId, message), "key_dispatch_failed");
 
-      case "BATCH_INSERT_TEXT": {
-        if (attachedTabId !== tabId) {
-          sendResponse({ ok: false, error: "not_attached" });
-          return;
-        }
-        try {
-          await sendDebuggerCommand(tabId, "Input.insertText", { text: message.text });
-          sendResponse({ ok: true });
-        } catch (e) {
-          sendResponse({ ok: false, error: normalizeDispatchError(tabId, e, "insert_text_failed") });
-        }
-        return;
-      }
+      case "BATCH_INSERT_TEXT":
+        return runAttached(
+          () => sendDebuggerCommand(tabId, "Input.insertText", { text: message.text }),
+          "insert_text_failed"
+        );
 
       case "BATCH_AWAIT_SAVE_QUIESCENCE": {
         if (attachedTabId !== tabId) {
           sendResponse({ ok: false, error: "not_attached" });
           return;
         }
-        if (pendingQuiescenceWait) {
-          sendResponse({ ok: false, error: "already_waiting" });
-          return;
-        }
+        if (pendingQuiescenceWait) resolveQuiescenceWait("superseded");
         const now = Date.now();
         const idleMs = message.idleMs ?? 500;
         const maxWaitMs = message.maxWaitMs ?? 4000;
@@ -549,7 +488,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      case "BATCH_NANO_INJECT": {
+      case "BATCH_NANO_INJECT":
         try {
           await chrome.scripting.executeScript({
             target: { tabId },
@@ -562,7 +501,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: e.message || "nano_inject_failed" });
         }
         return;
-      }
 
       default:
         sendResponse({ ok: false, error: "unknown_message_type" });
