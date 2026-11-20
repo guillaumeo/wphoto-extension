@@ -4,6 +4,8 @@
   const CAPTION_MAX_LENGTH = 1000;
   const GENERATE_TIMEOUT_MS = 35000;
   const DEFAULT_429_BACKOFF_MS = [2000, 5000, 10000];
+  const DEFAULT_CLOUD_MODEL = "gemini-flash-latest";
+  const FALLBACK_CLOUD_MODEL = "gemini-2.5-flash";
   let nanoMsgSeq = 0;
   let nanoInjectedOrigin = null;
   let logWriteBusy = false;
@@ -260,7 +262,7 @@
 
   async function callGeminiCloud({
     apiKey,
-    model = "gemini-3.1-flash-lite",
+    model = DEFAULT_CLOUD_MODEL,
     rules = "",
     instruction = "",
     imgSrc = null,
@@ -367,7 +369,7 @@
       });
 
       let activeModel =
-        model === "gemini-3.1-flash-lite" && cachedWorkingCloudModel ? cachedWorkingCloudModel : model;
+        model === DEFAULT_CLOUD_MODEL && cachedWorkingCloudModel ? cachedWorkingCloudModel : model;
       let resp = null;
       let retries429 = 0;
       const maxRetries429 =
@@ -378,8 +380,8 @@
       for (let attempt = 0; attempt <= maxRetries429; attempt++) {
         if (isAborted()) return { error: "batch_aborted", retries429 };
         resp = await fetchWithTimeout(buildUrl(activeModel), buildReqInit(thinkingConfigSupported), 15000);
-        if (resp.status === 404 && activeModel === "gemini-3.1-flash-lite") {
-          activeModel = "gemini-3.1-flash-lite-preview";
+        if (resp.status === 404 && activeModel === DEFAULT_CLOUD_MODEL) {
+          activeModel = FALLBACK_CLOUD_MODEL;
           cachedWorkingCloudModel = activeModel;
           resp = await fetchWithTimeout(buildUrl(activeModel), buildReqInit(thinkingConfigSupported), 15000);
         }
@@ -388,7 +390,7 @@
           if (retryResp.ok || retryResp.status !== 400) thinkingConfigSupported = false;
           resp = retryResp;
         }
-        if (resp.ok && activeModel === "gemini-3.1-flash-lite-preview") {
+        if (resp.ok && activeModel === FALLBACK_CLOUD_MODEL) {
           cachedWorkingCloudModel = activeModel;
         }
         if (resp.status === 429 && attempt < maxRetries429) {
@@ -953,7 +955,7 @@
           } else {
             const cloudRes = await callGeminiCloud({
               apiKey: apiKeyVal.trim(),
-              model: "gemini-3.1-flash-lite",
+              model: DEFAULT_CLOUD_MODEL,
               rules: rulesText,
               instruction: instrText,
               imgSrc: photoImg,

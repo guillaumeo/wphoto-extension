@@ -6,7 +6,7 @@ A Chrome Manifest V3 extension that generates concise, encyclopedic AI descripti
 
 - **Flexible Batch Scope**: Process either manually selected grid photos or an entire album automatically, skipping videos and unowned shared photos.
 - **Cloud & Local AI Models**:
-  - **Cloud (Gemini API)**: Uses `gemini-3.1-flash-lite` / `gemini-3.1-flash-lite-preview` with aspect-preserving image resizing (`<= 768px`) and automatic HTTP 429 exponential backoff.
+  - **Cloud (Gemini API)**: Uses `gemini-flash-latest` (with automatic 404 fallback to `gemini-2.5-flash`) with aspect-preserving image resizing (`<= 768px`) and automatic HTTP 429 exponential backoff.
   - **Local (Gemini Nano)**: Uses Chrome's on-device `LanguageModel` API when available, with automatic metadata fallback (tagged people, place, and year) when local AI is unavailable.
 - **Metadata-Aware Prompts**: Extracts tagged people's first names, untagged people counts, place names, and years from the Google Photos Info panel while following neutral documentary caption guidelines.
 - **Photo Stack Propagation**: Detects photo stacks and shares the generated caption across items in the stack without redundant model calls.
@@ -17,7 +17,7 @@ A Chrome Manifest V3 extension that generates concise, encyclopedic AI descripti
 
 ### Option 1: From GitHub Releases (Recommended)
 
-1. Download `wphoto-extension-v1.1.0.zip` from the [Releases](https://github.com/guillaumeo/wphoto-extension/releases) page.
+1. Download `wphoto-extension-vXXX.zip` from the [Releases](https://github.com/guillaumeo/wphoto-extension/releases) page.
 2. Extract the archive to a permanent folder on your computer.
 3. Open `chrome://extensions` in Google Chrome.
 4. Enable **Developer mode** (top-right toggle).

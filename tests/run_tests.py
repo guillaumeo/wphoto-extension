@@ -1664,7 +1664,7 @@ def main():
 
         globalThis.fetch = async (url, init) => {{
           fetchUrls.push(url);
-          if (url.includes("gemini-3.1-flash-lite:")) {{
+          if (url.includes("gemini-flash-latest:")) {{
             return {{ ok: false, status: 404, text: async () => "Not Found" }};
           }}
           const body = JSON.parse(init.body);
@@ -1811,7 +1811,7 @@ def main():
             throw new Error("Expected prefilledCaption to skip AI model call and write same text once: " + JSON.stringify({{ resPrefilled, fetchUrls, insertedTexts }}));
           }}
 
-          // Second cloud call should use cached gemini-3.1-flash-lite-preview directly without 404ing on gemini-3.1-flash-lite
+          // Second cloud call should use cached gemini-2.5-flash directly without 404ing on gemini-flash-latest
           fetchUrls = [];
           await window.WPhotoAiEngine.callGeminiCloud({{
             apiKey: "TEST_KEY_STACK",
@@ -1819,8 +1819,8 @@ def main():
             instruction: "Describe.",
             lang: "fr"
           }});
-          if (fetchUrls.length !== 1 || !fetchUrls[0].includes("gemini-3.1-flash-lite-preview")) {{
-            throw new Error("Expected cachedWorkingCloudModel to call preview directly in 1 request, got: " + JSON.stringify(fetchUrls));
+          if (fetchUrls.length !== 1 || !fetchUrls[0].includes("gemini-2.5-flash")) {{
+            throw new Error("Expected cachedWorkingCloudModel to call fallback directly in 1 request, got: " + JSON.stringify(fetchUrls));
           }}
 
           print("AI_04_OK");
